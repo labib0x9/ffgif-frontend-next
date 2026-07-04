@@ -160,14 +160,10 @@ const api = {
   async uploadStatus(key) {
     return request(`/uploads/${encodeURIComponent(key)}/status`);
   },
-  // 4. Tell the backend the upload is done so it can register/process it.
-  async confirmUpload(key, filename) {
-    return request("/uploads/confirm", { method: "POST", body: { key, filename } });
-  },
   async getLastUpload() {
     return request("/uploads/last");
   },
-  // 5. Fetch the converted mp4 for local preview/trim.
+  // 4. Fetch the converted mp4 for local preview/trim.
   // /uploads/{key}/stream requires the same Authorization header as every
   // other route, but a plain <video src> can't attach custom headers — so
   // we fetch it manually (auth included) and hand the browser a blob URL
@@ -1120,16 +1116,13 @@ function ConverterPanel({ quota, refreshQuota }) {
       // format it's in — the backend handles transcoding to mp4.
       await api.putToPresignedUrl(created.upload_url, f);
 
-      // 3. Tell the backend the upload landed, so it can kick off conversion.
-      await api.confirmUpload(created.key, f.name);
-
-      // 4. Poll until the backend reports the mp4 conversion is done.
+      // 3. Poll until the backend reports the mp4 conversion is done.
       // status: "ready" means /stream now serves playable mp4 bytes.
       setUploading(false);
       setStage("converting_preview");
       await pollUntilReady(created.key);
 
-      // 5. Fetch the converted mp4 (authenticated) as a blob URL — this is
+      // 4. Fetch the converted mp4 (authenticated) as a blob URL — this is
       // what actually gets previewed and trimmed, not the original file.
       await loadKeyIntoTrim(created.key, { filename: f.name, size_bytes: f.size });
       setLastUpload({ key: created.key, filename: f.name, size_bytes: f.size });
