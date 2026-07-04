@@ -76,6 +76,14 @@ async function request(path, { method = "GET", body, authed = true, raw = false 
   }
 
   if (!res.ok) {
+    // A 401 on an authed request means the token is invalid/expired —
+    // broadcast this so AuthProvider can force a logout, no matter which
+    // panel/component triggered the request. Skip this for the initial
+    // login/signup calls themselves (authed: false), since a bad password
+    // there is just a normal form error, not a dead session.
+    if (res.status === 401 && authed) {
+      window.dispatchEvent(new CustomEvent("ffgif:unauthorized"));
+    }
     // Expected error shape: { error: "message", code: status_code }
     if (parsed && typeof parsed === "object" && parsed.error) {
       throw { code: parsed.code ?? res.status, error: parsed.error };
@@ -506,6 +514,29 @@ function AuthProvider({ children }) {
     setUser(null);
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
   };
+
+  // Listen for the global "unauthorized" signal dispatched by the api
+  // client whenever any authed request comes back 401 (expired/invalid
+  // token, revoked session, etc.) — not just the initial restore-on-mount
+  // check. This is a ref so the listener always calls the *current*
+  // logout/token closures without needing to re-subscribe on every render.
+  const stateRef = useRef({ token, logout });
+  useEffect(() => {
+    stateRef.current = { token, logout };
+  }, [token, logout]);
+
+  useEffect(() => {
+    const onUnauthorized = () => {
+      // Only act if we actually think we're logged in — avoids a stray
+      // event (e.g. a race during initial restore) clearing an already-
+      // logged-out state and firing spurious toasts.
+      if (!stateRef.current.token) return;
+      stateRef.current.logout();
+      window.dispatchEvent(new CustomEvent("ffgif:session-expired-toast"));
+    };
+    window.addEventListener("ffgif:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("ffgif:unauthorized", onUnauthorized);
+  }, []);
 
   return (
     <AuthCtx.Provider value={{ user, token, login, logout, setUser, restoring }}>
@@ -2414,6 +2445,20 @@ function AppInner() {
   const { token, restoring } = useAuth();
   const [authScreen, setAuthScreen] = useState("landing");
   const { toasts, push, dismiss } = useToasts();
+
+  // Surface the reason for a forced logout (session expired / invalid
+  // credentials) once AuthProvider has already cleared the token. Kept
+  // separate from AuthProvider itself so the toast system (which lives
+  // above the ToastCtx.Provider boundary) doesn't need to be threaded
+  // through the auth context.
+  useEffect(() => {
+    const onExpired = () => {
+      setAuthScreen("login");
+      push("Your session expired — please sign in again.", "error");
+    };
+    window.addEventListener("ffgif:session-expired-toast", onExpired);
+    return () => window.removeEventListener("ffgif:session-expired-toast", onExpired);
+  }, [push]);
 
   if (restoring) {
     return (
