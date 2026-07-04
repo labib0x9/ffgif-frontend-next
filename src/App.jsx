@@ -154,9 +154,10 @@ const api = {
       throw { code: res.status, error: "could not upload file to storage" };
     }
   },
-  // 3. Poll until the backend confirms the file is ready. For this app,
-  // "ready" specifically means: the backend has finished transcoding the
-  // original upload to mp4 and /stream will now serve playable mp4 bytes.
+  // 3. Poll until the backend confirms the file is ready. Returns
+  // { status } where status is one of "uploading" (still transcoding),
+  // "ok" (the backend has finished transcoding the original upload to mp4
+  // and /stream will now serve playable mp4 bytes), or "failed".
   async uploadStatus(key) {
     return request(`/uploads/${encodeURIComponent(key)}/status`);
   },
@@ -998,6 +999,11 @@ function ConverterPanel({ quota, refreshQuota }) {
   const [lastUpload, setLastUpload] = useState(null); // { key, filename, ... } or null if none/unavailable
   const [lastUploadChecked, setLastUploadChecked] = useState(false);
   const [loadingLastUpload, setLoadingLastUpload] = useState(false);
+  // Live value of GET /uploads/{key}/status while we're polling it —
+  // "uploading" | "ok" | "failed". Drives the ConvertingPreviewStage
+  // animation so it keeps playing for exactly as long as the backend
+  // actually reports "uploading".
+  const [uploadStatus, setUploadStatus] = useState(null);
   const videoRef = useRef(null);
   const previewUrlRef = useRef(null);
 
@@ -1057,17 +1063,22 @@ function ConverterPanel({ quota, refreshQuota }) {
     setStage("trim");
   };
 
-  // Polls /uploads/{key}/status until the backend reports the mp4 is ready,
-  // or throws if it fails/takes too long. Shared by both fresh uploads and
-  // resuming from the last upload.
-  const pollUntilReady = async (key) => {
+  // Polls /uploads/{key}/status until the backend reports the mp4 is ready.
+  // Status values: "uploading" (still transcoding — keep polling), "ok"
+  // (ready, /stream will serve playable mp4 bytes), "failed". Throws if it
+  // fails or takes too long. Shared by both fresh uploads and resuming from
+  // the last upload. Calls onStatus on every poll tick so the caller can
+  // drive a live "still uploading" animation for as long as this runs.
+  const pollUntilReady = async (key, onStatus) => {
     const deadline = Date.now() + 60000; // transcoding can take longer than the original upload
     while (Date.now() < deadline) {
       const s = await api.uploadStatus(key);
-      if (s.status === "ready") return;
-      if (s.status === "failed" || s.status === "error") {
+      onStatus?.(s.status);
+      if (s.status === "ok") return;
+      if (s.status === "failed") {
         throw { code: 500, error: "video conversion failed" };
       }
+      // "uploading" (or any other in-progress value) — keep polling.
       await new Promise((r) => setTimeout(r, 800));
     }
     throw { code: 504, error: "video took too long to convert" };
@@ -1080,9 +1091,13 @@ function ConverterPanel({ quota, refreshQuota }) {
     setUploadKey(lastUpload.key);
     try {
       // Re-check status in case the last upload never finished converting
-      // or failed — don't assume "exists" means "ready".
+      // or failed — don't assume "exists" means "ok".
       const s = await api.uploadStatus(lastUpload.key);
-      if (s.status !== "ready") {
+      setUploadStatus(s.status);
+      if (s.status === "failed") {
+        throw { code: 409, error: "that upload failed converting — try uploading again" };
+      }
+      if (s.status !== "ok") {
         throw { code: 409, error: "that upload isn't ready yet — try uploading again" };
       }
       setStage("converting_preview");
@@ -1092,6 +1107,7 @@ function ConverterPanel({ quota, refreshQuota }) {
       setStage("upload");
     } finally {
       setLoadingLastUpload(false);
+      setUploadStatus(null);
     }
   };
 
@@ -1117,10 +1133,11 @@ function ConverterPanel({ quota, refreshQuota }) {
       await api.putToPresignedUrl(created.upload_url, f);
 
       // 3. Poll until the backend reports the mp4 conversion is done.
-      // status: "ready" means /stream now serves playable mp4 bytes.
+      // status: "ok" means /stream now serves playable mp4 bytes.
       setUploading(false);
       setStage("converting_preview");
-      await pollUntilReady(created.key);
+      setUploadStatus("uploading");
+      await pollUntilReady(created.key, setUploadStatus);
 
       // 4. Fetch the converted mp4 (authenticated) as a blob URL — this is
       // what actually gets previewed and trimmed, not the original file.
@@ -1131,6 +1148,7 @@ function ConverterPanel({ quota, refreshQuota }) {
       setStage("upload");
     } finally {
       setUploading(false);
+      setUploadStatus(null);
     }
   };
 
@@ -1215,7 +1233,7 @@ function ConverterPanel({ quota, refreshQuota }) {
       )}
 
       {stage === "converting_preview" && (
-        <ConvertingPreviewStage filename={originalFile?.name || lastUpload?.filename} />
+        <ConvertingPreviewStage filename={originalFile?.name || lastUpload?.filename} status={uploadStatus} />
       )}
 
       {stage === "trim" && meta && previewUrl && (
@@ -1629,15 +1647,30 @@ function FrameScanLoader({ label, sublabel, frames = 10 }) {
   );
 }
 
-function ConvertingPreviewStage({ filename }) {
+// Mirrors GET /uploads/{key}/status, whose value is one of "uploading",
+// "ok", or "failed". This stage only ever renders while we're actively
+// polling (the parent swaps to "trim" the instant status flips to "ok",
+// and bails to an error on "failed"), so in practice status here is always
+// "uploading" — the scan-line animation runs continuously for exactly as
+// long as that's true, then disappears the moment the backend says
+// otherwise.
+function ConvertingPreviewStage({ filename, status }) {
+  const label = status === "uploading" || !status ? "Uploading" : status === "failed" ? "Upload failed" : "Converting to MP4";
   return (
     <Card style={{ padding: "48px 24px", textAlign: "center" }}>
       <FrameScanLoader
-        label="Converting to MP4"
+        label={label}
         sublabel={
           <>
             <span style={{ fontFamily: "JetBrains Mono, monospace", color: "#9A9CA5" }}>{filename || "your video"}</span>
-            <br />This can take a moment for larger files or uncommon formats.
+            <br />
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+              <span style={{
+                width: 6, height: 6, borderRadius: "50%", background: "#FF3D5E", flexShrink: 0,
+                animation: "ffgif-pulse-dot 1s ease-in-out infinite",
+              }} />
+              This can take a moment for larger files or uncommon formats.
+            </span>
           </>
         }
       />
@@ -2501,6 +2534,7 @@ export default function App() {
         @keyframes ffgif-frame-sweep { 0%, 87.5%, 100% { opacity: 0; } 6% { opacity: 1; } 12.5% { opacity: 0; } }
         @keyframes ffgif-scan { 0% { left: -26%; } 100% { left: 100%; } }
         @keyframes ffgif-loop-spin { to { transform: rotate(360deg); } }
+        @keyframes ffgif-pulse-dot { 0%, 100% { opacity: 0.3; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
         input::placeholder { color: #4A4C54; }
         input:disabled { cursor: not-allowed; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
