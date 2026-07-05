@@ -31,6 +31,11 @@ function useFonts() {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+// Cheap client-side guard mirroring the backend's own size cap — catches
+// obviously-too-large files before spending a full upload+wait cycle on
+// something that would just get rejected server-side anyway.
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024; // 200MB
+
 // Base URL of the Go backend. Override via VITE_API_BASE_URL in a .env file if needed.
 const BASE_URL = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE_URL) || "http://localhost:8080";
 
@@ -164,27 +169,20 @@ const api = {
   async getLastUpload() {
     return request("/uploads/last");
   },
-  // 4. Fetch the converted mp4 for local preview/trim.
-  // /uploads/{key}/stream requires the same Authorization header as every
-  // other route, but a plain <video src> can't attach custom headers — so
-  // we fetch it manually (auth included) and hand the browser a blob URL
-  // instead. This downloads the whole mp4 up front rather than true
-  // streaming range-requests; fine for short clips, worth revisiting with
-  // a signed/query-token stream URL if clips get long.
-  async fetchStreamBlobUrl(key) {
-    const res = await fetch(`${BASE_URL}/uploads/${encodeURIComponent(key)}/stream`, {
-      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-    });
-    if (!res.ok) {
-      let error = "could not load converted video";
-      try {
-        const body = await res.json();
-        if (body?.error) error = body.error;
-      } catch {}
-      throw { code: res.status, error };
-    }
-    const blob = await res.blob();
-    return URL.createObjectURL(blob);
+  // 4. Get a presigned URL for the converted mp4, for local preview/trim.
+  // Previously this fetched /uploads/{key}/stream manually (with an auth
+  // header) and handed the browser a blob URL — but that downloads the
+  // entire file up front and can't do real HTTP range requests, since a
+  // <video src> can't carry custom headers and a blob has no byte-range
+  // semantics once it's fully buffered in memory.
+  // Instead, mirror the same presign pattern used for uploads: ask the
+  // authed API for a short-lived, token-bearing URL that points straight
+  // at storage, then hand that URL directly to <video src>. Storage serves
+  // Range requests natively, so the browser can seek/scrub without
+  // re-downloading the whole clip, and there's no CORS-tainted-canvas risk
+  // since it's a plain cross-origin <video>, not a manual fetch+blob.
+  async getStreamUrl(key) {
+    return request(`/uploads/${encodeURIComponent(key)}/stream`);
   },
 
   // ---- convert ----
@@ -987,7 +985,9 @@ function ConverterPanel({ quota, refreshQuota }) {
   const { push } = useToastsCtx();
   const [stage, setStage] = useState("upload"); // upload | converting_preview | trim | converting | done
   const [originalFile, setOriginalFile] = useState(null); // raw file as picked, any format
-  const [previewUrl, setPreviewUrl] = useState(null); // blob URL of backend-converted mp4
+  const [previewUrl, setPreviewUrl] = useState(null); // presigned stream URL — null until the user asks to play
+  const [streamLoading, setStreamLoading] = useState(false);
+  const [streamError, setStreamError] = useState(null);
   const [meta, setMeta] = useState(null);
   const [uploadKey, setUploadKey] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -1005,7 +1005,6 @@ function ConverterPanel({ quota, refreshQuota }) {
   // in-progress step the backend is actually on.
   const [uploadStatus, setUploadStatus] = useState(null);
   const videoRef = useRef(null);
-  const previewUrlRef = useRef(null);
 
   // On entry, quietly check whether the user has a previous upload they
   // could resume with. Any failure (404, no upload yet, network hiccup)
@@ -1024,52 +1023,82 @@ function ConverterPanel({ quota, refreshQuota }) {
     })();
   }, []);
 
-  // Revoke the previous blob URL whenever we replace it, so we don't leak
-  // memory across multiple uploads in one session.
-  useEffect(() => {
-    return () => {
-      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
-    };
-  }, []);
+  // trim.end is clamped to a small safety margin below the reported
+  // duration — the backend's own ffprobe-measured duration can differ from
+  // whatever the browser later measures by a fraction of a second, and
+  // without the margin a trim.end dragged all the way to the edge could
+  // land just past what the backend considers valid and get rejected.
+  const DURATION_SAFETY_MARGIN = 0.05;
 
-  // Reads a video's duration directly in the browser from a blob URL.
-  const readVideoDuration = (url) =>
-    new Promise((resolve, reject) => {
-      const v = document.createElement("video");
-      v.preload = "metadata";
-      v.onloadedmetadata = () => resolve(v.duration);
-      v.onerror = () => reject(new Error("could not read video metadata"));
-      v.src = url;
-    });
-
-  // Shared by both "fresh upload" and "use last upload": once we have a key
-  // that's confirmed ready, fetch the converted mp4 and move to trim.
-  const loadKeyIntoTrim = async (key, fallbackMeta) => {
-    const blobUrl = await api.fetchStreamBlobUrl(key);
-    previewUrlRef.current = blobUrl;
-    setPreviewUrl(blobUrl);
-
-    const [last, duration] = await Promise.all([
-      api.getLastUpload().catch(() => null),
-      readVideoDuration(blobUrl).catch(() => null),
-    ]);
-    const durationSec = last?.duration_sec || duration || 0;
+  // Shared by both "fresh upload" and "use last upload": once status is
+  // "ok", call GET /uploads/last to get the authoritative key + metadata
+  // (filename, size, ffprobe duration) and move straight to the trim
+  // screen. This does NOT fetch a stream URL — trimming only needs the
+  // duration number, not the actual video bytes, so there's no reason to
+  // ask the backend for a presigned stream link until the user actually
+  // wants to play the preview. requestStreamUrl (below) handles that,
+  // triggered lazily from TrimStage's play button.
+  const enterTrimStage = async (fallbackMeta) => {
+    const last = await api.getLastUpload().catch(() => null);
+    const key = last?.key || fallbackMeta?.key;
+    if (!key) throw { code: 404, error: "could not find that upload" };
+    setUploadKey(key);
+    const durationSec = last?.duration_sec || 0;
+    const safeDuration = Math.max(0, durationSec - DURATION_SAFETY_MARGIN);
     setMeta({
       filename: last?.filename || fallbackMeta?.filename || "video",
       size_bytes: last?.size_bytes ?? fallbackMeta?.size_bytes ?? 0,
       duration_sec: durationSec,
+      safe_duration_sec: safeDuration,
     });
-    setTrim({ start: 0, end: Math.min(8, durationSec || 8) });
+    setTrim({ start: 0, end: Math.min(8, safeDuration || 8) });
+    setPreviewUrl(null);
+    setStreamError(null);
     setStage("trim");
   };
 
+  // Lazily fetches a presigned stream URL — only called once the user
+  // actually clicks play on the trim screen, not eagerly on entry. Safe to
+  // call more than once (e.g. after a failed attempt); no-ops if a preview
+  // is already loaded or a fetch is already in flight.
+  const requestStreamUrl = useCallback(async () => {
+    if (!uploadKey || previewUrl || streamLoading) return;
+    setStreamLoading(true);
+    setStreamError(null);
+    try {
+      const { url } = await api.getStreamUrl(uploadKey);
+      setPreviewUrl(url);
+    } catch (e) {
+      setStreamError(errMsg(e, "could not load the video"));
+    } finally {
+      setStreamLoading(false);
+    }
+  }, [uploadKey, previewUrl, streamLoading]);
+
+  // Fallback for when GET /uploads/last didn't include a duration_sec (or
+  // it was 0) — since we no longer eagerly load the video just to measure
+  // its duration, that number might not be known until the user actually
+  // presses play and the browser reports it via loadedmetadata. If that
+  // happens, backfill meta/trim from the real, browser-measured duration
+  // rather than leaving the frame strip stuck showing a zero-length clip.
+  const onDurationDiscovered = useCallback((durationSec) => {
+    setMeta((m) => {
+      if (!m || m.duration_sec) return m; // already had a real duration — don't override
+      const safeDuration = Math.max(0, durationSec - DURATION_SAFETY_MARGIN);
+      setTrim({ start: 0, end: Math.min(8, safeDuration || 8) });
+      return { ...m, duration_sec: durationSec, safe_duration_sec: safeDuration };
+    });
+  }, []);
+
   // Polls /uploads/{key}/status until the backend reports the mp4 is ready.
   // Status values: "uploading" and "processing" are both in-progress states
-  // (keep polling), "ok" means ready (/stream will serve playable mp4
-  // bytes), "failed" is terminal. Throws if it fails or takes too long.
-  // Shared by both fresh uploads and resuming from the last upload. Calls
-  // onStatus on every poll tick so the caller can drive a live animation
-  // that reflects whichever in-progress status is currently reported.
+  // (keep polling), "ok" means ready, "failed" is terminal. If the backend
+  // includes a reason for a failure (e.g. "unsupported codec", "file too
+  // large", "no video stream"), surface that instead of a generic message.
+  // Throws if it fails or takes too long. Shared by both fresh uploads and
+  // resuming from the last upload. Calls onStatus on every poll tick so the
+  // caller can drive a live animation that reflects whichever in-progress
+  // status is currently reported.
   const pollUntilReady = async (key, onStatus) => {
     const deadline = Date.now() + 60000; // transcoding can take longer than the original upload
     while (Date.now() < deadline) {
@@ -1077,7 +1106,7 @@ function ConverterPanel({ quota, refreshQuota }) {
       onStatus?.(s.status);
       if (s.status === "ok") return;
       if (s.status === "failed") {
-        throw { code: 500, error: "video conversion failed" };
+        throw { code: 500, error: s.reason || s.error || "video conversion failed" };
       }
       // "uploading", "processing" (or any other in-progress value) — keep polling.
       await new Promise((r) => setTimeout(r, 800));
@@ -1096,13 +1125,13 @@ function ConverterPanel({ quota, refreshQuota }) {
       const s = await api.uploadStatus(lastUpload.key);
       setUploadStatus(s.status);
       if (s.status === "failed") {
-        throw { code: 409, error: "that upload failed converting — try uploading again" };
+        throw { code: 409, error: s.reason || s.error || "that upload failed converting — try uploading again" };
       }
       if (s.status !== "ok") {
         throw { code: 409, error: "that upload isn't ready yet — try uploading again" };
       }
       setStage("converting_preview");
-      await loadKeyIntoTrim(lastUpload.key, lastUpload);
+      await enterTrimStage(lastUpload);
     } catch (e) {
       setError(errMsg(e, "could not load your last upload"));
       setStage("upload");
@@ -1119,7 +1148,13 @@ function ConverterPanel({ quota, refreshQuota }) {
     }
     if (!f) return;
     // Accept any video format here — the backend transcodes to mp4, the
-    // frontend doesn't gate on file type at all.
+    // frontend doesn't gate on file type at all. Size is the one thing
+    // cheap to check client-side before spending a full upload+wait cycle
+    // on something the backend will reject anyway.
+    if (f.size > MAX_UPLOAD_BYTES) {
+      setError(`this file is ${formatBytes(f.size)}, max is ${formatBytes(MAX_UPLOAD_BYTES)}`);
+      return;
+    }
     setError(null);
     setOriginalFile(f);
     setUploading(true);
@@ -1133,16 +1168,18 @@ function ConverterPanel({ quota, refreshQuota }) {
       // format it's in — the backend handles transcoding to mp4.
       await api.putToPresignedUrl(created.upload_url, f);
 
-      // 3. Poll until the backend reports the mp4 conversion is done.
-      // status: "ok" means /stream now serves playable mp4 bytes.
+      // 3. Poll until the backend reports status: "ok" — at that point
+      // GET /uploads/last is the source of truth for the key + metadata
+      // (see enterTrimStage), not this response.
       setUploading(false);
       setStage("converting_preview");
       setUploadStatus("uploading");
       await pollUntilReady(created.key, setUploadStatus);
 
-      // 4. Fetch the converted mp4 (authenticated) as a blob URL — this is
-      // what actually gets previewed and trimmed, not the original file.
-      await loadKeyIntoTrim(created.key, { filename: f.name, size_bytes: f.size });
+      // 4. Fetch key/filename/size/duration from GET /uploads/last and move
+      // to the trim screen. No stream URL is requested yet — that only
+      // happens if/when the user clicks play.
+      await enterTrimStage({ key: created.key, filename: f.name, size_bytes: f.size });
       setLastUpload({ key: created.key, filename: f.name, size_bytes: f.size });
     } catch (e) {
       setError(errMsg(e, "upload failed"));
@@ -1159,11 +1196,16 @@ function ConverterPanel({ quota, refreshQuota }) {
       setError("end time must be after start time");
       return;
     }
+    // Clamp to the safety-margined duration even if something upstream
+    // (e.g. a stale drag position) let trim.end creep past it — the
+    // backend's ffprobe-measured duration can be a hair shorter than what
+    // the browser reported.
+    const safeEnd = meta?.safe_duration_sec ? Math.min(trim.end, meta.safe_duration_sec) : trim.end;
     try {
       const res = await api.convert({
         upload_key: uploadKey,
         start_time: trim.start,
-        end_time: trim.end,
+        end_time: safeEnd,
         width: config.width,
         fps: config.fps,
         loop: config.loop,
@@ -1203,12 +1245,9 @@ function ConverterPanel({ quota, refreshQuota }) {
   }, [stage, job?.job_id]);
 
   const reset = () => {
-    if (previewUrlRef.current) {
-      URL.revokeObjectURL(previewUrlRef.current);
-      previewUrlRef.current = null;
-    }
     setStage("upload"); setOriginalFile(null); setPreviewUrl(null); setMeta(null); setUploadKey(null);
     setJob(null); setResultKey(null); setError(null); setTrim({ start: 0, end: 5 });
+    setStreamLoading(false); setStreamError(null);
   };
 
   return (
@@ -1237,9 +1276,13 @@ function ConverterPanel({ quota, refreshQuota }) {
         <ConvertingPreviewStage filename={originalFile?.name || lastUpload?.filename} status={uploadStatus} />
       )}
 
-      {stage === "trim" && meta && previewUrl && (
+      {stage === "trim" && meta && (
         <TrimStage
           previewUrl={previewUrl}
+          streamLoading={streamLoading}
+          streamError={streamError}
+          onRequestStream={requestStreamUrl}
+          onDurationDiscovered={onDurationDiscovered}
           meta={meta}
           trim={trim}
           setTrim={setTrim}
@@ -1346,9 +1389,10 @@ function UploadDropzone({ uploading, onPick }) {
 }
 
 /* ---- Frame strip scrubber: the signature element ---- */
-function FrameStrip({ duration, start, end, onChange, previewUrl, videoRef }) {
+function FrameStrip({ duration, maxEnd, start, end, onChange, previewUrl, videoRef }) {
   const trackRef = useRef(null);
   const [drag, setDrag] = useState(null); // 'start' | 'end' | null
+  const clampEnd = maxEnd ?? duration;
 
   const pctOf = (sec) => (duration ? (sec / duration) * 100 : 0);
 
@@ -1367,7 +1411,10 @@ function FrameStrip({ duration, start, end, onChange, previewUrl, videoRef }) {
         videoRef.current.currentTime = next;
       }
     } else {
-      const next = Math.max(sec, start + 0.2);
+      // Can't drag past maxEnd (a small safety margin below the browser's
+      // reported duration) — keeps the selection inside what the backend's
+      // own ffprobe-measured duration will actually accept.
+      const next = Math.min(Math.max(sec, start + 0.2), clampEnd);
       onChange({ start, end: next });
       // Same live-scrub behavior for the end handle, so dragging it shows
       // you where the clip will cut off.
@@ -1376,7 +1423,7 @@ function FrameStrip({ duration, start, end, onChange, previewUrl, videoRef }) {
         videoRef.current.currentTime = next;
       }
     }
-  }, [drag, duration, start, end, onChange, videoRef]);
+  }, [drag, duration, start, end, onChange, videoRef, clampEnd]);
 
   useEffect(() => {
     if (!drag) return;
@@ -1471,7 +1518,52 @@ function Handle({ pct, onDown }) {
   );
 }
 
-function TrimStage({ previewUrl, meta, trim, setTrim, config, setConfig, onConvert, onCancel, videoRef }) {
+/* ---- Shown in place of the <video> until the user asks to play — the
+   stream URL is only fetched on demand, not eagerly on entering trim. ---- */
+function VideoPosterPlayButton({ loading, error, onPlay }) {
+  return (
+    <div
+      onClick={!loading ? onPlay : undefined}
+      style={{
+        aspectRatio: "16 / 9", borderRadius: 10, background: "#000", marginBottom: 18,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        cursor: loading ? "default" : "pointer", position: "relative", overflow: "hidden",
+        border: "1px solid #21232A",
+      }}
+    >
+      <div style={{
+        position: "absolute", inset: 0, background: "linear-gradient(135deg, #17181C, #0B0C0F)",
+      }} />
+      <div style={{ position: "relative", textAlign: "center", padding: 20 }}>
+        {loading ? (
+          <>
+            <Spinner size={30} color="#FF3D5E" />
+            <div style={{ marginTop: 12, fontSize: 13, color: "#9A9CA5" }}>Loading video…</div>
+          </>
+        ) : error ? (
+          <>
+            <div style={{ color: "#FF5C5C", marginBottom: 10, display: "flex", justifyContent: "center" }}><Icon.Alert size={24} /></div>
+            <div style={{ fontSize: 13, color: "#9A9CA5", marginBottom: 14 }}>{error}</div>
+            <Button size="sm" variant="secondary" onClick={onPlay}>Try again</Button>
+          </>
+        ) : (
+          <>
+            <div style={{
+              width: 56, height: 56, borderRadius: "50%", background: "rgba(255,61,94,0.14)",
+              border: "1.5px solid rgba(255,61,94,0.4)", display: "flex", alignItems: "center",
+              justifyContent: "center", margin: "0 auto 12px", color: "#FF3D5E",
+            }}>
+              <svg viewBox="0 0 24 24" width={22} height={22} fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+            </div>
+            <div style={{ fontSize: 13.5, color: "#F3F1EC", fontWeight: 600 }}>Click to load preview</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TrimStage({ previewUrl, streamLoading, streamError, onRequestStream, onDurationDiscovered, meta, trim, setTrim, config, setConfig, onConvert, onCancel, videoRef }) {
   // Keep the latest trim values available inside the timeupdate handler
   // without having to re-attach the listener on every drag tick.
   const trimRef = useRef(trim);
@@ -1479,9 +1571,11 @@ function TrimStage({ previewUrl, meta, trim, setTrim, config, setConfig, onConve
 
   // Loop playback within [start, end] so the preview behaves like the GIF
   // will once exported, instead of playing through to the end of the video.
+  // Only relevant once previewUrl actually exists — before that there's no
+  // <video> element mounted yet (see the poster/play-button branch below).
   useEffect(() => {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || !previewUrl) return;
     const onTimeUpdate = () => {
       const { start, end } = trimRef.current;
       if (v.currentTime < start || v.currentTime >= end) {
@@ -1503,18 +1597,46 @@ function TrimStage({ previewUrl, meta, trim, setTrim, config, setConfig, onConve
       v.removeEventListener("timeupdate", onTimeUpdate);
       v.removeEventListener("play", onPlay);
     };
-  }, [videoRef]);
+  }, [videoRef, previewUrl]);
+
+  // Rough client-side size estimate — doesn't account for the actual
+  // palette-generation step, just a heuristic (KB/frame scales with the
+  // square of width, calibrated loosely around typical GIF compression at
+  // 480px). Purely a "heads up" for the user, not a precise prediction.
+  const frameCount = Math.max(0, Math.round((trim.end - trim.start) * config.fps));
+  const estKbPerFrame = 40 * Math.pow(config.width / 480, 2);
+  const estimatedSizeMB = ((frameCount * estKbPerFrame) / 1024).toFixed(1);
+  const estimatedLarge = frameCount * estKbPerFrame > 8000; // ~8MB+
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 22 }}>
       <Card style={{ padding: 20 }}>
-        <video
-          ref={videoRef}
-          src={previewUrl}
-          controls
-          style={{ width: "100%", borderRadius: 10, background: "#000", display: "block", marginBottom: 18 }}
+        {previewUrl ? (
+          <video
+            ref={videoRef}
+            src={previewUrl}
+            controls
+            autoPlay
+            className="ffgif-no-audio-video"
+            onLoadedMetadata={(e) => onDurationDiscovered?.(e.currentTarget.duration)}
+            style={{ width: "100%", borderRadius: 10, background: "#000", display: "block", marginBottom: 18 }}
+          />
+        ) : (
+          <VideoPosterPlayButton
+            loading={streamLoading}
+            error={streamError}
+            onPlay={onRequestStream}
+          />
+        )}
+        <FrameStrip
+          duration={meta.duration_sec}
+          maxEnd={meta.safe_duration_sec}
+          start={trim.start}
+          end={trim.end}
+          onChange={setTrim}
+          previewUrl={previewUrl}
+          videoRef={videoRef}
         />
-        <FrameStrip duration={meta.duration_sec} start={trim.start} end={trim.end} onChange={setTrim} previewUrl={previewUrl} videoRef={videoRef} />
         <div style={{ display: "flex", gap: 18, marginTop: 16, fontSize: 12.5, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>
           <span>{meta.filename}</span>
           <span>{formatBytes(meta.size_bytes)}</span>
@@ -1561,9 +1683,15 @@ function TrimStage({ previewUrl, meta, trim, setTrim, config, setConfig, onConve
           <div style={{ fontSize: 11.5, color: "#5C5E68", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8, fontWeight: 700 }}>Estimated output</div>
           <div style={{ display: "flex", gap: 16, fontFamily: "JetBrains Mono, monospace", fontSize: 13, color: "#9A9CA5" }}>
             <span>{(trim.end - trim.start).toFixed(1)}s clip</span>
-            <span>{Math.round((trim.end - trim.start) * config.fps)} frames</span>
+            <span>{frameCount} frames</span>
             <span>{config.width}px wide</span>
           </div>
+          {estimatedLarge && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, fontSize: 12, color: "#FFB74D" }}>
+              <Icon.Alert size={13} />
+              This may produce a large file (~{estimatedSizeMB}MB) — try a shorter clip, lower width, or fewer fps.
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", gap: 10 }}>
@@ -1982,9 +2110,9 @@ function GifCard({ gif, cachedUrl, onResolvedUrl, onOpen, onDelete, onDownload }
     // Draws the gif's first rendered frame onto an offscreen canvas, then
     // reads that canvas back out as a static PNG data URL. A canvas only
     // captures whatever frame was current at drawImage() time and never
-    // animates itself, so this gives us a real "thumbnail" even though the
-    // API has no dedicated static-thumbnail endpoint — the source is always
-    // the live animated gif, we just freeze it client-side.
+    // animates itself, so this gives us a real "thumbnail" even without a
+    // dedicated static-thumbnail endpoint — the source is the live
+    // animated gif, frozen client-side.
     const extractFirstFrame = (gifUrl) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
@@ -2009,25 +2137,40 @@ function GifCard({ gif, cachedUrl, onResolvedUrl, onOpen, onDelete, onDownload }
       img.src = gifUrl;
     };
 
-    if (cachedUrl) {
-      extractFirstFrame(cachedUrl);
+    const useCanvasFallback = () => {
+      if (cachedUrl) {
+        extractFirstFrame(cachedUrl);
+        return;
+      }
+      (async () => {
+        try {
+          const res = await api.downloadGif(gif.key);
+          if (cancelled) return;
+          onResolvedUrl(res.url);
+          extractFirstFrame(res.url);
+        } catch {
+          if (!cancelled) setThumbError(true);
+        }
+      })();
+    };
+
+    // Prefer a real backend-generated thumbnail when the API exposes one —
+    // skips the canvas/CORS-tainting workaround entirely. Still fall back
+    // to the canvas approach if the thumbnail URL 404s or fails to load,
+    // so a missing/broken thumbnail doesn't just show a broken-image icon.
+    if (gif.thumbnail_url) {
+      const probe = new Image();
+      probe.onload = () => { if (!cancelled) setThumbUrl(gif.thumbnail_url); };
+      probe.onerror = () => { if (!cancelled) useCanvasFallback(); };
+      probe.src = gif.thumbnail_url;
       return () => { cancelled = true; };
     }
 
-    (async () => {
-      try {
-        const res = await api.downloadGif(gif.key);
-        if (cancelled) return;
-        onResolvedUrl(res.url);
-        extractFirstFrame(res.url);
-      } catch {
-        if (!cancelled) setThumbError(true);
-      }
-    })();
+    useCanvasFallback();
     return () => { cancelled = true; };
-    // Only re-run if the underlying gif key changes — cachedUrl updates
-    // are handled by the branch above without refetching.
-  }, [gif.key]);
+    // Only re-run if the underlying gif key/thumbnail changes — cachedUrl
+    // updates are handled inside useCanvasFallback without refetching.
+  }, [gif.key, gif.thumbnail_url]);
 
   return (
     <div
@@ -2540,6 +2683,17 @@ export default function App() {
         @keyframes ffgif-loop-spin { to { transform: rotate(360deg); } }
         @keyframes ffgif-pulse-dot { 0%, 100% { opacity: 0.3; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
         input::placeholder { color: #4A4C54; }
+        /* The backend strips audio from every converted clip (-an), so the
+           trim preview video never has an audio track. Native controls
+           still render a mute/volume icon that does nothing — hide it
+           where the browser supports targeting individual control parts.
+           Webkit/Blink-only (Chrome, Safari, Edge); Firefox has no
+           equivalent selector, so its volume icon is left as-is there. */
+        .ffgif-no-audio-video::-webkit-media-controls-mute-button,
+        .ffgif-no-audio-video::-webkit-media-controls-volume-slider,
+        .ffgif-no-audio-video::-webkit-media-controls-volume-slider-container {
+          display: none !important;
+        }
         input:disabled { cursor: not-allowed; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: #2A2C33; border-radius: 4px; }
