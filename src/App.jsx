@@ -155,9 +155,9 @@ const api = {
     }
   },
   // 3. Poll until the backend confirms the file is ready. Returns
-  // { status } where status is one of "uploading" (still transcoding),
-  // "ok" (the backend has finished transcoding the original upload to mp4
-  // and /stream will now serve playable mp4 bytes), or "failed".
+  // { status } where status is one of "uploading" (bytes still landing),
+  // "processing" (transcoding to mp4), "ok" (done — /stream will now serve
+  // playable mp4 bytes), or "failed".
   async uploadStatus(key) {
     return request(`/uploads/${encodeURIComponent(key)}/status`);
   },
@@ -1000,9 +1000,9 @@ function ConverterPanel({ quota, refreshQuota }) {
   const [lastUploadChecked, setLastUploadChecked] = useState(false);
   const [loadingLastUpload, setLoadingLastUpload] = useState(false);
   // Live value of GET /uploads/{key}/status while we're polling it —
-  // "uploading" | "ok" | "failed". Drives the ConvertingPreviewStage
-  // animation so it keeps playing for exactly as long as the backend
-  // actually reports "uploading".
+  // "uploading" | "processing" | "ok" | "failed". Drives the
+  // ConvertingPreviewStage animation/label so it reflects whichever
+  // in-progress step the backend is actually on.
   const [uploadStatus, setUploadStatus] = useState(null);
   const videoRef = useRef(null);
   const previewUrlRef = useRef(null);
@@ -1064,11 +1064,12 @@ function ConverterPanel({ quota, refreshQuota }) {
   };
 
   // Polls /uploads/{key}/status until the backend reports the mp4 is ready.
-  // Status values: "uploading" (still transcoding — keep polling), "ok"
-  // (ready, /stream will serve playable mp4 bytes), "failed". Throws if it
-  // fails or takes too long. Shared by both fresh uploads and resuming from
-  // the last upload. Calls onStatus on every poll tick so the caller can
-  // drive a live "still uploading" animation for as long as this runs.
+  // Status values: "uploading" and "processing" are both in-progress states
+  // (keep polling), "ok" means ready (/stream will serve playable mp4
+  // bytes), "failed" is terminal. Throws if it fails or takes too long.
+  // Shared by both fresh uploads and resuming from the last upload. Calls
+  // onStatus on every poll tick so the caller can drive a live animation
+  // that reflects whichever in-progress status is currently reported.
   const pollUntilReady = async (key, onStatus) => {
     const deadline = Date.now() + 60000; // transcoding can take longer than the original upload
     while (Date.now() < deadline) {
@@ -1078,7 +1079,7 @@ function ConverterPanel({ quota, refreshQuota }) {
       if (s.status === "failed") {
         throw { code: 500, error: "video conversion failed" };
       }
-      // "uploading" (or any other in-progress value) — keep polling.
+      // "uploading", "processing" (or any other in-progress value) — keep polling.
       await new Promise((r) => setTimeout(r, 800));
     }
     throw { code: 504, error: "video took too long to convert" };
@@ -1648,14 +1649,17 @@ function FrameScanLoader({ label, sublabel, frames = 10 }) {
 }
 
 // Mirrors GET /uploads/{key}/status, whose value is one of "uploading",
-// "ok", or "failed". This stage only ever renders while we're actively
-// polling (the parent swaps to "trim" the instant status flips to "ok",
-// and bails to an error on "failed"), so in practice status here is always
-// "uploading" — the scan-line animation runs continuously for exactly as
-// long as that's true, then disappears the moment the backend says
-// otherwise.
+// "processing", "ok", or "failed". This stage only ever renders while
+// we're actively polling (the parent swaps to "trim" the instant status
+// flips to "ok", and bails to an error on "failed"), so status here is
+// always one of the two in-progress values — the scan-line animation runs
+// continuously the whole time, and the label swaps between them so it's
+// clear which step the backend is actually on.
 function ConvertingPreviewStage({ filename, status }) {
-  const label = status === "uploading" || !status ? "Uploading" : status === "failed" ? "Upload failed" : "Converting to MP4";
+  const label =
+    status === "processing" ? "Converting to MP4"
+    : status === "failed" ? "Upload failed"
+    : "Uploading";
   return (
     <Card style={{ padding: "48px 24px", textAlign: "center" }}>
       <FrameScanLoader
