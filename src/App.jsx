@@ -183,7 +183,7 @@ const api = {
   // re-downloading the whole clip, and there's no CORS-tainted-canvas risk
   // since it's a plain cross-origin <video>, not a manual fetch+blob.
   async getStreamUrl(key) {
-    return request(`/uploads/${encodeURIComponent(key)}/stream-url`);
+    return request(`/uploads/${encodeURIComponent(key)}/stream`);
   },
 
   // ---- convert ----
@@ -1121,24 +1121,15 @@ function ConverterPanel({ quota, refreshQuota }) {
     setLoadingLastUpload(true);
     setUploadKey(lastUpload.key);
     try {
-      // Re-check status in case the last upload never finished converting
-      // or failed — don't assume "exists" means "ok".
-      const s = await api.uploadStatus(lastUpload.key);
-      setUploadStatus(s.status);
-      if (s.status === "failed") {
-        throw { code: 409, error: s.reason || s.error || "that upload failed converting — try uploading again" };
-      }
-      if (s.status !== "ok") {
-        throw { code: 409, error: "that upload isn't ready yet — try uploading again" };
-      }
-      setStage("converting_preview");
+      // No status re-check here — GET /uploads/last only ever returns an
+      // upload that's already done converting, so go straight to the trim
+      // screen instead of re-polling /uploads/{key}/status first.
       await enterTrimStage(lastUpload);
     } catch (e) {
       setError(errMsg(e, "could not load your last upload"));
       setStage("upload");
     } finally {
       setLoadingLastUpload(false);
-      setUploadStatus(null);
     }
   };
 
