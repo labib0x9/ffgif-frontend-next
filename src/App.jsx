@@ -140,11 +140,12 @@ const api = {
   // ---- uploads ----
   // 1. Ask backend for a presigned URL. Any video format is accepted here —
   // the backend transcodes to mp4 server-side; the frontend doesn't need to
-  // pre-validate the format.
+  // pre-validate the format. Only filename is sent — the backend's
+  // presign request no longer accepts/needs content_type.
   async createUpload(file) {
     return request("/uploads", {
       method: "POST",
-      body: { filename: file.name, content_type: file.type || "application/octet-stream" },
+      body: { filename: file.name },
     });
   },
   // 2. Actually PUT the file bytes to the presigned storage URL.
@@ -182,7 +183,7 @@ const api = {
   // re-downloading the whole clip, and there's no CORS-tainted-canvas risk
   // since it's a plain cross-origin <video>, not a manual fetch+blob.
   async getStreamUrl(key) {
-    return request(`/uploads/${encodeURIComponent(key)}/stream`);
+    return request(`/uploads/${encodeURIComponent(key)}/stream-url`);
   },
 
   // ---- convert ----
