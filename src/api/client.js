@@ -1,9 +1,13 @@
 export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024; // 200MB
 
-// Base URL of the Go backend. Override via VITE_API_BASE_URL in a .env file if needed.
+// Base URL of the Go backend.
+// In dev mode (vite server), it defaults to http://localhost:8080.
+// In production builds served by Go, it defaults to "" (same-origin relative requests).
+// Override via VITE_API_BASE_URL in .env if needed.
 export const BASE_URL =
-  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE_URL) ||
-  "http://localhost:8080";
+  (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.VITE_API_BASE_URL !== undefined)
+    ? import.meta.env.VITE_API_BASE_URL
+    : (import.meta.env?.DEV ? "http://localhost:8080" : "");
 
 // Module-level token holder. Set by AuthProvider on login/logout so the api
 // client can attach Authorization headers without needing React context.
