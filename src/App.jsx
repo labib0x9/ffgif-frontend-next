@@ -66,7 +66,7 @@ async function request(path, { method = "GET", body, authed = true, raw = false 
       headers,
       body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     });
-  } catch (networkErr) {
+  } catch {
     throw { code: 0, error: "could not reach server" };
   }
 
@@ -210,6 +210,12 @@ const api = {
   async deleteGif(key) {
     return request(`/gifs/me/${encodeURIComponent(key)}`, { method: "DELETE" });
   },
+  async shareGif(key, payload) {
+    return request(`/gifs/me/${encodeURIComponent(key)}/shares`, { method: "POST", body: payload });
+  },
+  async listSharedGifs() {
+    return request("/gifs/me/shares");
+  },
 };
 
 /* ============================================================================
@@ -296,6 +302,46 @@ const Icon = {
     <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M7 3v18M17 3v18M3 9h4M17 9h4M3 15h4M17 15h4" />
+    </svg>
+  ),
+  Share: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" /><line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+    </svg>
+  ),
+  Users: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+  ),
+  Clock: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+    </svg>
+  ),
+  Copy: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  ),
+  ExternalLink: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+  ),
+  Refresh: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  ),
+  Search: (p) => (
+    <svg viewBox="0 0 24 24" width={p.size || 18} height={p.size || 18} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
     </svg>
   ),
 };
@@ -505,11 +551,11 @@ function AuthProvider({ children }) {
     setToken(t);
   };
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setToken(null);
     setUser(null);
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-  };
+  }, []);
 
   // Listen for the global "unauthorized" signal dispatched by the api
   // client whenever any authed request comes back 401 (expired/invalid
@@ -882,6 +928,7 @@ function timecode(sec) {
 }
 
 function timeAgo(iso) {
+  if (!iso) return "—";
   const diff = Date.now() - new Date(iso).getTime();
   const days = Math.floor(diff / 86400000);
   if (days === 0) return "today";
@@ -889,11 +936,40 @@ function timeAgo(iso) {
   return `${days}d ago`;
 }
 
+function formatExpiry(iso) {
+  if (!iso) return "Never expires";
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return "Invalid date";
+  const diff = date.getTime() - Date.now();
+  if (diff < 0) return "Expired";
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+  if (minutes < 60) return `Expires in ${Math.max(1, minutes)}m`;
+  if (hours < 24) return `Expires in ${hours}h`;
+  if (days < 30) return `Expires in ${days}d`;
+  return `Expires ${date.toLocaleDateString()}`;
+}
+
+function formatFullDateTime(iso) {
+  if (!iso) return "Never (no expiration)";
+  const date = new Date(iso);
+  if (isNaN(date.getTime())) return "—";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function Sidebar({ active, setActive, onLogout }) {
   const { user } = useAuth();
   const items = [
     { id: "convert", label: "Convert", icon: Icon.Upload },
     { id: "gifs", label: "My GIFs", icon: Icon.Grid },
+    { id: "shared", label: "Shared GIFs", icon: Icon.Share },
     { id: "account", label: "Account", icon: Icon.User },
   ];
   return (
@@ -982,7 +1058,7 @@ function MiniMeter({ label, pct, valueText }) {
    CONVERTER FLOW — upload → frame-strip trim → configure → job progress
 ============================================================================ */
 
-function ConverterPanel({ quota, refreshQuota }) {
+function ConverterPanel({ refreshQuota }) {
   const { push } = useToastsCtx();
   const [stage, setStage] = useState("upload"); // upload | converting_preview | trim | converting | done
   const [originalFile, setOriginalFile] = useState(null); // raw file as picked, any format
@@ -996,6 +1072,7 @@ function ConverterPanel({ quota, refreshQuota }) {
   const [config, setConfig] = useState({ width: 480, fps: 10, loop: true });
   const [job, setJob] = useState(null);
   const [resultKey, setResultKey] = useState(null);
+  const [resultUrl, setResultUrl] = useState(null);
   const [error, setError] = useState(null);
   const [lastUpload, setLastUpload] = useState(null); // { key, filename, ... } or null if none/unavailable
   const [lastUploadChecked, setLastUploadChecked] = useState(false);
@@ -1209,16 +1286,20 @@ function ConverterPanel({ quota, refreshQuota }) {
     }
   };
 
+  const jobId = job?.job_id;
   useEffect(() => {
-    if (stage !== "converting" || !job) return;
+    if (stage !== "converting" || !jobId) return;
     let cancelled = false;
     const poll = async () => {
       try {
-        const res = await api.convertStatus(job.job_id);
+        const res = await api.convertStatus(jobId);
         if (cancelled) return;
         setJob((j) => ({ ...j, ...res }));
         if (res.status === "completed") {
-          setResultKey(res.gif_id);
+          const key = res.gif_id || res.gif_key || res.key || res.id || res.gif?.key || res.gif?.gif_key || jobId;
+          const directUrl = res.url || res.download_url || res.gif_url || res.thumbnail_url || res.presigned_url || res.data?.url;
+          setResultKey(key);
+          if (directUrl) setResultUrl(directUrl);
           setStage("done");
           refreshQuota();
           push("Your GIF is ready.");
@@ -1234,11 +1315,11 @@ function ConverterPanel({ quota, refreshQuota }) {
     };
     poll();
     return () => { cancelled = true; };
-  }, [stage, job?.job_id]);
+  }, [stage, jobId, refreshQuota, push]);
 
   const reset = () => {
     setStage("upload"); setOriginalFile(null); setPreviewUrl(null); setMeta(null); setUploadKey(null);
-    setJob(null); setResultKey(null); setError(null); setTrim({ start: 0, end: 5 });
+    setJob(null); setResultKey(null); setResultUrl(null); setError(null); setTrim({ start: 0, end: 5 });
     setStreamLoading(false); setStreamError(null);
   };
 
@@ -1291,7 +1372,7 @@ function ConverterPanel({ quota, refreshQuota }) {
       )}
 
       {stage === "done" && (
-        <DoneStage resultKey={resultKey} onAnother={reset} />
+        <DoneStage resultKey={resultKey} initialUrl={resultUrl} onAnother={reset} />
       )}
     </div>
   );
@@ -1381,7 +1462,7 @@ function UploadDropzone({ uploading, onPick }) {
 }
 
 /* ---- Frame strip scrubber: the signature element ---- */
-function FrameStrip({ duration, maxEnd, start, end, onChange, previewUrl, videoRef }) {
+function FrameStrip({ duration, maxEnd, start, end, onChange, previewUrl: _previewUrl, videoRef }) {
   const trackRef = useRef(null);
   const [drag, setDrag] = useState(null); // 'start' | 'end' | null
   const clampEnd = maxEnd ?? duration;
@@ -1831,23 +1912,42 @@ function ConvertingStage({ job }) {
   );
 }
 
-function DoneStage({ resultKey, onAnother }) {
-  const [gifUrl, setGifUrl] = useState(null);
+function DoneStage({ resultKey, initialUrl, onAnother }) {
+  const [gifUrl, setGifUrl] = useState(initialUrl || null);
   const [loadError, setLoadError] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialUrl);
+  const [sharing, setSharing] = useState(false);
 
   const loadPreview = useCallback(async () => {
+    if (initialUrl) {
+      setGifUrl(initialUrl);
+      setLoading(false);
+      return;
+    }
+    if (!resultKey) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await api.downloadGif(resultKey);
-      setGifUrl(res.url);
+      let res = await api.downloadGif(resultKey).catch(() => null);
+      let url = typeof res === "string" ? res : (res?.url || res?.download_url || res?.presigned_url || res?.data?.url);
+      if (!url) {
+        res = await api.getGif(resultKey).catch(() => null);
+        url = typeof res === "string" ? res : (res?.url || res?.download_url || res?.thumbnail_url || res?.data?.url);
+      }
+      if (url) {
+        setGifUrl(url);
+      } else {
+        setLoadError("couldn't load the preview");
+      }
     } catch (e) {
       setLoadError(errMsg(e, "couldn't load the preview"));
     } finally {
       setLoading(false);
     }
-  }, [resultKey]);
+  }, [resultKey, initialUrl]);
 
   useEffect(() => { loadPreview(); }, [loadPreview]);
 
@@ -1888,7 +1988,10 @@ function DoneStage({ resultKey, onAnother }) {
       </div>
 
       <div style={{ fontSize: 13, color: "#8A8C96", marginBottom: 24 }}>Find it under My GIFs to rename, share, or download anytime.</div>
-      <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+      <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+        <Button variant="secondary" icon={<Icon.Share size={14} />} onClick={() => setSharing(true)}>
+          Share loop
+        </Button>
         {gifUrl && !loadError && (
           <Button variant="secondary" icon={<Icon.Download size={14} />} onClick={() => window.open(gifUrl, "_blank")}>
             Download
@@ -1896,7 +1999,231 @@ function DoneStage({ resultKey, onAnother }) {
         )}
         <Button onClick={onAnother}>Convert another</Button>
       </div>
+
+      {sharing && (
+        <ShareGifModal
+          gif={{ key: resultKey, name: "New loop" }}
+          onClose={() => setSharing(false)}
+          onShared={() => {}}
+        />
+      )}
     </Card>
+  );
+}
+
+/* ============================================================================
+   SHARE GIF MODAL
+============================================================================ */
+
+function ShareGifModal({ gif, onClose, onShared }) {
+  const { push } = useToastsCtx();
+  const [email, setEmail] = useState("");
+  const [hasExpiry, setHasExpiry] = useState(false);
+  const [preset, setPreset] = useState("24h"); // "1h", "24h", "7d", "30d", "custom"
+  const [customDateTime, setCustomDateTime] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const calculateExpireIso = useCallback(() => {
+    if (!hasExpiry) return null;
+    const now = new Date();
+    if (preset === "1h") {
+      return new Date(now.getTime() + 60 * 60 * 1000).toISOString();
+    }
+    if (preset === "24h") {
+      return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    }
+    if (preset === "7d") {
+      return new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    }
+    if (preset === "30d") {
+      return new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    }
+    if (preset === "custom" && customDateTime) {
+      const parsed = new Date(customDateTime);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+    return null;
+  }, [hasExpiry, preset, customDateTime]);
+
+  const handleShare = async (e) => {
+    e?.preventDefault();
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError("Please enter a recipient email address.");
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    const expire_at = calculateExpireIso();
+    const gifKey = gif.gif_key || gif.key;
+    try {
+      const res = await api.shareGif(gifKey, {
+        shared_with: cleanEmail,
+        expire_at,
+      });
+      const msg = (typeof res === "object" && res?.message) ? res.message : `Shared with ${cleanEmail}`;
+      push(msg);
+      onShared?.();
+      onClose();
+    } catch (err) {
+      setError(errMsg(err, "Failed to share GIF"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(8,8,10,0.72)",
+        backdropFilter: "blur(4px)", zIndex: 300, display: "flex", alignItems: "center",
+        justifyContent: "center", padding: 20,
+      }}
+    >
+      <Card
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          padding: 26, maxWidth: 440, width: "100%",
+          boxShadow: "0 20px 40px rgba(0,0,0,0.6)", border: "1px solid #2A2C33",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{
+              width: 36, height: 36, borderRadius: 9, background: "rgba(255,61,94,0.12)", color: "#FF3D5E",
+              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}>
+              <Icon.Share size={18} />
+            </div>
+            <div>
+              <div style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: 17, fontWeight: 700, color: "#F3F1EC" }}>
+                Share loop
+              </div>
+              <div style={{ fontSize: 12, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>
+                {gif.name || gif.key || gif.gif_key}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none", border: "none", color: "#5C5E68", cursor: "pointer",
+              fontSize: 20, lineHeight: 1, padding: 4,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {error && (
+          <div style={{
+            background: "#1F1416", border: "1px solid #3A2226", borderRadius: 9, padding: "10px 12px",
+            marginBottom: 16, color: "#FF8A8A", fontSize: 13, display: "flex", gap: 8, alignItems: "center",
+          }}>
+            <Icon.Alert size={14} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleShare}>
+          <Field label="Share with (email)" hint="The user who will be granted access to this loop.">
+            <Input
+              type="email"
+              autoFocus
+              required
+              placeholder="user@example.com"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(null); }}
+            />
+          </Field>
+
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <label style={{ fontSize: 12.5, fontWeight: 600, color: "#9A9CA5", letterSpacing: 0.2 }}>
+                Expiration date
+              </label>
+              <div
+                onClick={() => setHasExpiry(!hasExpiry)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12,
+                  color: hasExpiry ? "#FF3D5E" : "#5C5E68", userSelect: "none",
+                }}
+              >
+                <span>{hasExpiry ? "Set expiry" : "Never expires"}</span>
+                <Toggle checked={hasExpiry} />
+              </div>
+            </div>
+
+            {hasExpiry && (
+              <div style={{
+                background: "#14151A", border: "1px solid #21232A", borderRadius: 10,
+                padding: 12, animation: "gifapp-slidein .15s ease",
+              }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                  {[
+                    { id: "1h", label: "1 Hour" },
+                    { id: "24h", label: "24 Hours" },
+                    { id: "7d", label: "7 Days" },
+                    { id: "30d", label: "30 Days" },
+                    { id: "custom", label: "Custom" },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setPreset(p.id)}
+                      style={{
+                        padding: "5px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                        border: `1px solid ${preset === p.id ? "#FF3D5E" : "#2A2C33"}`,
+                        background: preset === p.id ? "rgba(255,61,94,0.12)" : "transparent",
+                        color: preset === p.id ? "#FF3D5E" : "#8A8C96",
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {preset === "custom" && (
+                  <div style={{ marginTop: 8 }}>
+                    <Input
+                      type="datetime-local"
+                      value={customDateTime}
+                      min={new Date().toISOString().slice(0, 16)}
+                      onChange={(e) => setCustomDateTime(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <div style={{ fontSize: 11.5, color: "#5C5E68", marginTop: 8, display: "flex", alignItems: "center", gap: 5 }}>
+                  <Icon.Clock size={12} />
+                  <span>
+                    Will expire: {formatFullDateTime(calculateExpireIso())}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 22 }}>
+            <Button type="button" variant="secondary" size="md" onClick={onClose} disabled={loading}>
+              Cancel
+            </Button>
+            <Button type="submit" size="md" loading={loading} icon={<Icon.Share size={15} />}>
+              Share loop
+            </Button>
+          </div>
+        </form>
+      </Card>
+    </div>
   );
 }
 
@@ -1904,13 +2231,14 @@ function DoneStage({ resultKey, onAnother }) {
    MY GIFS — list/grid + detail drawer
 ============================================================================ */
 
-function GifsPanel() {
+function GifsPanel({ onNavigateShared }) {
   const { push } = useToastsCtx();
   const [filter, setFilter] = useState("all");
   const [gifs, setGifs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [selected, setSelected] = useState(null);
+  const [sharingGif, setSharingGif] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   // Cache of key -> presigned file URL, shared between grid cards and the
   // detail drawer so the same gif is never fetched twice in one session.
@@ -1925,10 +2253,8 @@ function GifsPanel() {
     setLoadError(null);
     try {
       const res = await api.listGifs(status);
-      // Guard against a missing/null/malformed body — treat anything that
-      // isn't an array as "no gifs" rather than letting .map blow up or
-      // silently rendering nothing.
-      setGifs(Array.isArray(res?.data) ? res.data : []);
+      const items = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+      setGifs(items);
     } catch (e) {
       setGifs([]);
       setLoadError(errMsg(e, "could not load your gifs"));
@@ -1943,7 +2269,7 @@ function GifsPanel() {
   const onRename = async (key, name) => {
     try {
       await api.updateGif(key, { name });
-      setGifs((g) => g.map((x) => (x.key === key ? { ...x, name } : x)));
+      setGifs((g) => g.map((x) => ((x.key === key || x.gif_key === key || x.id === key) ? { ...x, name } : x)));
       push("Renamed.");
     } catch (e) {
       push(errMsg(e, "rename failed"), "error");
@@ -1953,7 +2279,7 @@ function GifsPanel() {
   const onToggleVisibility = async (key, status) => {
     try {
       await api.updateGif(key, { status });
-      setGifs((g) => g.map((x) => (x.key === key ? { ...x, status } : x)));
+      setGifs((g) => g.map((x) => ((x.key === key || x.gif_key === key || x.id === key) ? { ...x, status } : x)));
       push(status === "public" ? "Made public." : "Made private.");
     } catch (e) {
       push(errMsg(e, "could not update"), "error");
@@ -1963,7 +2289,7 @@ function GifsPanel() {
   const onDelete = async (key) => {
     try {
       await api.deleteGif(key);
-      setGifs((g) => g.filter((x) => x.key !== key));
+      setGifs((g) => g.filter((x) => x.key !== key && x.gif_key !== key && x.id !== key));
       setConfirmDelete(null);
       setSelected(null);
       push("Deleted.");
@@ -1974,8 +2300,17 @@ function GifsPanel() {
 
   const onDownload = async (key) => {
     try {
-      const res = await api.downloadGif(key);
-      window.open(res.url, "_blank");
+      let res = await api.downloadGif(key).catch(() => null);
+      let url = typeof res === "string" ? res : (res?.url || res?.download_url || res?.presigned_url || res?.data?.url);
+      if (!url) {
+        res = await api.getGif(key).catch(() => null);
+        url = typeof res === "string" ? res : (res?.url || res?.download_url || res?.thumbnail_url || res?.data?.url);
+      }
+      if (url) {
+        window.open(url, "_blank");
+      } else {
+        push("Could not download GIF", "error");
+      }
     } catch (e) {
       push(errMsg(e, "download failed"), "error");
     }
@@ -1987,21 +2322,28 @@ function GifsPanel() {
         title="My GIFs"
         subtitle={`${gifs.length} loop${gifs.length === 1 ? "" : "s"}`}
         right={
-          <div style={{ display: "flex", gap: 6 }}>
-            {["all", "private", "public"].map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                style={{
-                  padding: "7px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-                  border: `1px solid ${filter === f ? "#FF3D5E" : "#2A2C33"}`,
-                  background: filter === f ? "rgba(255,61,94,0.12)" : "transparent",
-                  color: filter === f ? "#FF3D5E" : "#9A9CA5", textTransform: "capitalize",
-                }}
-              >
-                {f}
-              </button>
-            ))}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {onNavigateShared && (
+              <Button variant="secondary" size="sm" icon={<Icon.Share size={13} />} onClick={onNavigateShared}>
+                Shared GIFs
+              </Button>
+            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              {["all", "private", "public"].map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  style={{
+                    padding: "7px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                    border: `1px solid ${filter === f ? "#FF3D5E" : "#2A2C33"}`,
+                    background: filter === f ? "rgba(255,61,94,0.12)" : "transparent",
+                    color: filter === f ? "#FF3D5E" : "#9A9CA5", textTransform: "capitalize",
+                  }}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
           </div>
         }
       />
@@ -2023,39 +2365,53 @@ function GifsPanel() {
         />
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 16 }}>
-          {gifs.map((g) => (
-            <GifCard
-              key={g.key}
-              gif={g}
-              cachedUrl={urlCache[g.key]}
-              onResolvedUrl={(url) => cacheUrl(g.key, url)}
-              onOpen={() => setSelected(g)}
-              onDelete={() => setConfirmDelete(g)}
-              onDownload={() => onDownload(g.key)}
-            />
-          ))}
+          {gifs.map((g, idx) => {
+            const key = g.key || g.gif_key || g.id || `gif-${idx}`;
+            return (
+              <GifCard
+                key={key}
+                gif={g}
+                onOpen={() => setSelected(g)}
+                onShare={() => setSharingGif(g)}
+                onDelete={() => setConfirmDelete(g)}
+                onDownload={() => onDownload(key)}
+              />
+            );
+          })}
         </div>
       )}
 
       {selected && (
         <GifDetailDrawer
           gif={selected}
-          cachedUrl={urlCache[selected.key]}
-          onResolvedUrl={(url) => cacheUrl(selected.key, url)}
+          cachedUrl={urlCache[selected.key || selected.gif_key || selected.id] || selected.url || selected.thumbnail_url}
+          onResolvedUrl={(url) => {
+            const k = selected.key || selected.gif_key || selected.id;
+            if (k) cacheUrl(k, url);
+          }}
           onClose={() => setSelected(null)}
           onRename={onRename}
           onToggleVisibility={onToggleVisibility}
+          onShare={() => setSharingGif(selected)}
           onDelete={() => setConfirmDelete(selected)}
-          onDownload={() => onDownload(selected.key)}
+          onDownload={() => onDownload(selected.key || selected.gif_key || selected.id)}
+        />
+      )}
+
+      {sharingGif && (
+        <ShareGifModal
+          gif={sharingGif}
+          onClose={() => setSharingGif(null)}
+          onShared={() => {}}
         />
       )}
 
       {confirmDelete && (
         <ConfirmDialog
           title="Delete this GIF?"
-          body={`"${confirmDelete.name || confirmDelete.key}" will be permanently removed. This can't be undone.`}
+          body={`"${confirmDelete.name || confirmDelete.key || confirmDelete.gif_key || "this loop"}" will be permanently removed. This can't be undone.`}
           confirmLabel="Delete"
-          onConfirm={() => onDelete(confirmDelete.key)}
+          onConfirm={() => onDelete(confirmDelete.key || confirmDelete.gif_key || confirmDelete.id)}
           onCancel={() => setConfirmDelete(null)}
         />
       )}
@@ -2091,78 +2447,39 @@ function EmptyState({ icon, title, subtitle, action }) {
   );
 }
 
-function GifCard({ gif, cachedUrl, onResolvedUrl, onOpen, onDelete, onDownload }) {
+function GifCard({ gif, onOpen, onShare, onDelete, onDownload }) {
   const [hover, setHover] = useState(false);
-  const [thumbUrl, setThumbUrl] = useState(null); // static first-frame, as a canvas-derived data URL
+  const [thumbUrl, setThumbUrl] = useState(gif.thumbnail_url || null);
   const [thumbError, setThumbError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    const key = gif.key || gif.gif_key || gif.id;
 
-    // Draws the gif's first rendered frame onto an offscreen canvas, then
-    // reads that canvas back out as a static PNG data URL. A canvas only
-    // captures whatever frame was current at drawImage() time and never
-    // animates itself, so this gives us a real "thumbnail" even without a
-    // dedicated static-thumbnail endpoint — the source is the live
-    // animated gif, frozen client-side.
-    const extractFirstFrame = (gifUrl) => {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      img.onload = () => {
-        if (cancelled) return;
-        try {
-          const canvas = document.createElement("canvas");
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0);
-          setThumbUrl(canvas.toDataURL("image/png"));
-        } catch {
-          // toDataURL throws if the storage host doesn't send permissive
-          // CORS headers (canvas gets "tainted" by cross-origin pixel data).
-          // Fall back to showing the live gif directly — still a preview,
-          // just not frozen to a single frame.
-          if (!cancelled) setThumbUrl(gifUrl);
-        }
-      };
-      img.onerror = () => { if (!cancelled) setThumbError(true); };
-      img.src = gifUrl;
-    };
-
-    const useCanvasFallback = () => {
-      if (cachedUrl) {
-        extractFirstFrame(cachedUrl);
-        return;
-      }
-      (async () => {
-        try {
-          const res = await api.downloadGif(gif.key);
-          if (cancelled) return;
-          onResolvedUrl(res.url);
-          extractFirstFrame(res.url);
-        } catch {
-          if (!cancelled) setThumbError(true);
-        }
-      })();
-    };
-
-    // Prefer a real backend-generated thumbnail when the API exposes one —
-    // skips the canvas/CORS-tainting workaround entirely. Still fall back
-    // to the canvas approach if the thumbnail URL 404s or fails to load,
-    // so a missing/broken thumbnail doesn't just show a broken-image icon.
     if (gif.thumbnail_url) {
-      const probe = new Image();
-      probe.onload = () => { if (!cancelled) setThumbUrl(gif.thumbnail_url); };
-      probe.onerror = () => { if (!cancelled) useCanvasFallback(); };
-      probe.src = gif.thumbnail_url;
-      return () => { cancelled = true; };
+      setThumbUrl(gif.thumbnail_url);
+      setThumbError(false);
+      return;
     }
 
-    useCanvasFallback();
+    if (!key) return;
+
+    (async () => {
+      try {
+        const res = await api.getGif(key).catch(() => null);
+        if (cancelled) return;
+        if (res && res.thumbnail_url) {
+          setThumbUrl(res.thumbnail_url);
+        } else {
+          setThumbError(true);
+        }
+      } catch {
+        if (!cancelled) setThumbError(true);
+      }
+    })();
+
     return () => { cancelled = true; };
-    // Only re-run if the underlying gif key/thumbnail changes — cachedUrl
-    // updates are handled inside useCanvasFallback without refetching.
-  }, [gif.key, gif.thumbnail_url]);
+  }, [gif.key, gif.gif_key, gif.id, gif.thumbnail_url]);
 
   return (
     <div
@@ -2181,24 +2498,23 @@ function GifCard({ gif, cachedUrl, onResolvedUrl, onOpen, onDelete, onDownload }
         {thumbUrl && !thumbError ? (
           <img
             src={thumbUrl}
-            alt={gif.name || "GIF preview"}
+            alt={gif.name || "Thumbnail preview"}
             style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
             onError={() => setThumbError(true)}
           />
-        ) : thumbError ? (
-          <Icon.Alert size={22} color="#5C5E68" />
         ) : (
-          <div style={{ animation: "ffgif-loop-spin 1.4s linear infinite" }}>
-            <Icon.Film size={22} />
+          <div style={{ color: "#5C5E68", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+            <Icon.Film size={24} />
           </div>
         )}
         <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 5 }}>
-          <Badge type={gif.status} />
+          <Badge type={gif.status || "private"} />
         </div>
         {hover && (
-          <div style={{ position: "absolute", inset: 0, background: "rgba(14,15,18,0.55)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            <IconButton onClick={(e) => { e.stopPropagation(); onDownload(); }} icon={<Icon.Download size={15} />} />
-            <IconButton onClick={(e) => { e.stopPropagation(); onDelete(); }} icon={<Icon.Trash size={15} />} danger />
+          <div style={{ position: "absolute", inset: 0, background: "rgba(14,15,18,0.6)", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <IconButton onClick={(e) => { e.stopPropagation(); onShare(); }} icon={<Icon.Share size={15} />} title="Share loop" />
+            <IconButton onClick={(e) => { e.stopPropagation(); onDownload(); }} icon={<Icon.Download size={15} />} title="Download" />
+            <IconButton onClick={(e) => { e.stopPropagation(); onDelete(); }} icon={<Icon.Trash size={15} />} danger title="Delete" />
           </div>
         )}
       </div>
@@ -2208,7 +2524,7 @@ function GifCard({ gif, cachedUrl, onResolvedUrl, onOpen, onDelete, onDownload }
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>
           <span>{timeAgo(gif.created_at)}</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Icon.Download size={11} />{gif.download}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Icon.Download size={11} />{gif.download ?? 0}</span>
         </div>
       </div>
     </div>
@@ -2230,10 +2546,11 @@ function Badge({ type }) {
   );
 }
 
-function IconButton({ icon, onClick, danger }) {
+function IconButton({ icon, onClick, danger, title }) {
   return (
     <button
       onClick={onClick}
+      title={title}
       style={{
         width: 34, height: 34, borderRadius: 9, border: "none", cursor: "pointer",
         background: danger ? "rgba(255,92,92,0.15)" : "rgba(255,255,255,0.1)",
@@ -2245,26 +2562,42 @@ function IconButton({ icon, onClick, danger }) {
   );
 }
 
-function GifDetailDrawer({ gif, cachedUrl, onResolvedUrl, onClose, onRename, onToggleVisibility, onDelete, onDownload }) {
+function GifDetailDrawer({ gif, cachedUrl, onResolvedUrl, onClose, onRename, onToggleVisibility, onDelete, onDownload, onShare }) {
+  const key = gif.key || gif.gif_key || gif.id;
   const [name, setName] = useState(gif.name || "");
   const [editing, setEditing] = useState(false);
-  const [url, setUrl] = useState(cachedUrl || null);
+  const initialUrl = cachedUrl || gif.url || gif.thumbnail_url || null;
+  const [url, setUrl] = useState(initialUrl);
   const [previewError, setPreviewError] = useState(null);
-  const [loadingPreview, setLoadingPreview] = useState(!cachedUrl);
+  const [loadingPreview, setLoadingPreview] = useState(!initialUrl);
 
   const loadPreview = useCallback(async () => {
+    if (!key) {
+      if (!url) setPreviewError("no gif key found");
+      setLoadingPreview(false);
+      return;
+    }
     setLoadingPreview(true);
     setPreviewError(null);
     try {
-      const res = await api.downloadGif(gif.key);
-      setUrl(res.url);
-      onResolvedUrl(res.url);
+      let res = await api.downloadGif(key).catch(() => null);
+      let resUrl = typeof res === "string" ? res : (res?.url || res?.download_url || res?.presigned_url || res?.data?.url);
+      if (!resUrl) {
+        res = await api.getGif(key).catch(() => null);
+        resUrl = typeof res === "string" ? res : (res?.url || res?.download_url || res?.thumbnail_url || res?.data?.url);
+      }
+      if (resUrl) {
+        setUrl(resUrl);
+        onResolvedUrl?.(resUrl);
+      } else if (!url) {
+        setPreviewError("couldn't load the preview");
+      }
     } catch (e) {
-      setPreviewError(errMsg(e, "couldn't load the preview"));
+      if (!url) setPreviewError(errMsg(e, "couldn't load the preview"));
     } finally {
       setLoadingPreview(false);
     }
-  }, [gif.key, onResolvedUrl]);
+  }, [key, onResolvedUrl, url]);
 
   useEffect(() => {
     if (cachedUrl) {
@@ -2272,13 +2605,16 @@ function GifDetailDrawer({ gif, cachedUrl, onResolvedUrl, onClose, onRename, onT
       setLoadingPreview(false);
       return;
     }
+    if (gif.url) {
+      setUrl(gif.url);
+      setLoadingPreview(false);
+      return;
+    }
     loadPreview();
-    // Only re-fetch if the gif itself changes; cachedUrl arriving later is
-    // handled by the branch above without a duplicate request.
-  }, [gif.key]);
+  }, [key, cachedUrl, gif.url, loadPreview]);
 
   const saveName = () => {
-    onRename(gif.key, name);
+    onRename(key, name);
     setEditing(false);
   };
 
@@ -2292,7 +2628,7 @@ function GifDetailDrawer({ gif, cachedUrl, onResolvedUrl, onClose, onRename, onT
         padding: 24, boxSizing: "border-box", overflowY: "auto", animation: "gifapp-slideleft .2s ease",
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-          <span style={{ fontSize: 12, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>{gif.key}</span>
+          <span style={{ fontSize: 12, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>{key}</span>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "#5C5E68", cursor: "pointer", fontSize: 20, lineHeight: 1 }}>×</button>
         </div>
 
@@ -2354,8 +2690,427 @@ function GifDetailDrawer({ gif, cachedUrl, onResolvedUrl, onClose, onRename, onT
         </div>
 
         <div style={{ display: "flex", gap: 10 }}>
+          <Button variant="secondary" icon={<Icon.Share size={14} />} onClick={onShare} style={{ flex: 1 }}>Share</Button>
           <Button variant="secondary" icon={<Icon.Download size={14} />} onClick={onDownload} style={{ flex: 1 }}>Download</Button>
           <Button variant="danger" icon={<Icon.Trash size={14} />} onClick={onDelete} style={{ flex: 1 }}>Delete</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+   SHARED GIFS — list/grid + detail drawer
+============================================================================ */
+
+function SharedGifsPanel({ onNavigateGifs }) {
+  const { push } = useToastsCtx();
+  const [sharedGifs, setSharedGifs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all"); // "all" | "active" | "expired"
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await api.listSharedGifs();
+      const items = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+      setSharedGifs(items);
+    } catch (e) {
+      setSharedGifs([]);
+      setLoadError(errMsg(e, "could not load shared gifs"));
+      push(errMsg(e, "could not load shared gifs"), "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [push]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const filteredGifs = sharedGifs.filter((g) => {
+    const isExpired = g.expires_at ? new Date(g.expires_at).getTime() < Date.now() : false;
+    if (statusFilter === "active" && isExpired) return false;
+    if (statusFilter === "expired" && !isExpired) return false;
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    const name = (g.name || "").toLowerCase();
+    const key = (g.gif_key || g.key || "").toLowerCase();
+    const sharedWith = (g.shared_with || "").toLowerCase();
+    const ownerId = (g.owner_id || "").toLowerCase();
+    return name.includes(q) || key.includes(q) || sharedWith.includes(q) || ownerId.includes(q);
+  });
+
+  const onCopyLink = (url) => {
+    if (!url) return;
+    navigator.clipboard.writeText(url);
+    push("GIF link copied to clipboard.");
+  };
+
+  const onDownload = (url, name) => {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || "shared.gif";
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  return (
+    <div>
+      <PageHeader
+        title="Shared GIFs"
+        subtitle={`${sharedGifs.length} loop${sharedGifs.length === 1 ? "" : "s"} shared with you`}
+        right={
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            {onNavigateGifs && (
+              <Button variant="secondary" size="sm" icon={<Icon.Grid size={13} />} onClick={onNavigateGifs}>
+                My GIFs
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" icon={<Icon.Refresh size={14} />} onClick={load} loading={loading}>
+              Refresh
+            </Button>
+          </div>
+        }
+      />
+
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 220 }}>
+          <div style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#5C5E68", display: "flex" }}>
+            <Icon.Search size={15} />
+          </div>
+          <input
+            type="text"
+            placeholder="Search by name, key, owner, or recipient..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              ...inputStyle,
+              paddingLeft: 36,
+              paddingTop: 8,
+              paddingBottom: 8,
+              fontSize: 13,
+            }}
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery("")}
+              style={{
+                position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", color: "#5C5E68", cursor: "pointer", fontSize: 16,
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 6 }}>
+          {[
+            { id: "all", label: "All" },
+            { id: "active", label: "Active" },
+            { id: "expired", label: "Expired" },
+          ].map((f) => (
+            <button
+              key={f.id}
+              onClick={() => setStatusFilter(f.id)}
+              style={{
+                padding: "7px 14px", borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                border: `1px solid ${statusFilter === f.id ? "#FF3D5E" : "#2A2C33"}`,
+                background: statusFilter === f.id ? "rgba(255,61,94,0.12)" : "transparent",
+                color: statusFilter === f.id ? "#FF3D5E" : "#9A9CA5",
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <GifGridSkeleton />
+      ) : loadError ? (
+        <EmptyState
+          icon={<Icon.Alert size={32} />}
+          title="Couldn't load shared GIFs"
+          subtitle={loadError}
+          action={<Button variant="secondary" onClick={load} style={{ marginTop: 4 }}>Try again</Button>}
+        />
+      ) : sharedGifs.length === 0 ? (
+        <EmptyState
+          icon={<Icon.Users size={32} />}
+          title="No shared loops yet"
+          subtitle="When someone shares a GIF with your email, it will appear here."
+        />
+      ) : filteredGifs.length === 0 ? (
+        <EmptyState
+          icon={<Icon.Search size={32} />}
+          title="No matching loops"
+          subtitle="Try adjusting your search query or filter."
+          action={<Button variant="secondary" size="sm" onClick={() => { setSearchQuery(""); setStatusFilter("all"); }}>Clear filters</Button>}
+        />
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
+          {filteredGifs.map((g, idx) => (
+            <SharedGifCard
+              key={`${g.gif_key || g.key || idx}-${g.shared_with}`}
+              gif={g}
+              onOpen={() => setSelected(g)}
+              onCopyLink={() => onCopyLink(g.url)}
+              onDownload={() => onDownload(g.url, g.name)}
+            />
+          ))}
+        </div>
+      )}
+
+      {selected && (
+        <SharedGifDetailDrawer
+          gif={selected}
+          onClose={() => setSelected(null)}
+          onCopyLink={() => onCopyLink(selected.url)}
+          onDownload={() => onDownload(selected.url, selected.name)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SharedGifCard({ gif, onOpen, onCopyLink, onDownload }) {
+  const [hover, setHover] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  const isExpired = (gif.expires_at || gif.expire_at) ? new Date(gif.expires_at || gif.expire_at).getTime() < Date.now() : false;
+
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={onOpen}
+      style={{
+        borderRadius: 12, background: "#17181C", border: `1px solid ${hover ? "#3D3F47" : "#21232A"}`,
+        overflow: "hidden", cursor: "pointer", transition: "border-color .15s ease",
+        opacity: isExpired ? 0.75 : 1,
+      }}
+    >
+      <div style={{
+        height: 130, background: "linear-gradient(135deg, #1D1F25, #14151A)", display: "flex",
+        alignItems: "center", justifyContent: "center", color: "#2A2C33", position: "relative",
+      }}>
+        {gif.thumbnail_url && !imgError ? (
+          <img
+            src={gif.thumbnail_url}
+            alt={gif.name || "Shared GIF thumbnail"}
+            style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div style={{ color: "#5C5E68", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+            <Icon.Film size={24} />
+          </div>
+        )}
+
+        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", gap: 5 }}>
+          {isExpired ? (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700,
+              padding: "3px 8px", borderRadius: 6, textTransform: "uppercase", letterSpacing: 0.3,
+              background: "rgba(255,92,92,0.15)", color: "#FF5C5C",
+            }}>
+              <Icon.Alert size={10} /> Expired
+            </span>
+          ) : !gif.expires_at ? (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700,
+              padding: "3px 8px", borderRadius: 6, textTransform: "uppercase", letterSpacing: 0.3,
+              background: "rgba(61,220,151,0.14)", color: "#3DDC97",
+            }}>
+              <Icon.Check size={10} /> Never expires
+            </span>
+          ) : (
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10.5, fontWeight: 700,
+              padding: "3px 8px", borderRadius: 6, letterSpacing: 0.3,
+              background: "rgba(255,183,77,0.15)", color: "#FFB74D",
+            }}>
+              <Icon.Clock size={10} /> {formatExpiry(gif.expires_at)}
+            </span>
+          )}
+        </div>
+
+        {hover && (
+          <div style={{
+            position: "absolute", inset: 0, background: "rgba(14,15,18,0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+          }}>
+            {gif.url && (
+              <IconButton
+                onClick={(e) => { e.stopPropagation(); onCopyLink(); }}
+                icon={<Icon.Copy size={15} />}
+                title="Copy GIF URL"
+              />
+            )}
+            {gif.url && (
+              <IconButton
+                onClick={(e) => { e.stopPropagation(); onDownload(); }}
+                icon={<Icon.Download size={15} />}
+                title="Download"
+              />
+            )}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: "12px 14px" }}>
+        <div style={{
+          fontSize: 13.5, fontWeight: 600, color: "#F3F1EC", whiteSpace: "nowrap",
+          overflow: "hidden", textOverflow: "ellipsis", marginBottom: 6,
+        }}>
+          {gif.name || "Untitled loop"}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, color: "#8A8C96", marginBottom: 4 }}>
+          <span style={{ fontFamily: "JetBrains Mono, monospace", color: "#5C5E68" }}>{gif.gif_key || gif.key}</span>
+          {gif.shared_with && (
+            <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 110 }} title={`Shared with ${gif.shared_with}`}>
+              @{gif.shared_with.split("@")[0]}
+            </span>
+          )}
+        </div>
+        {gif.owner_id && (
+          <div style={{ fontSize: 11, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>
+            Owner: {gif.owner_id}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SharedGifDetailDrawer({ gif, onClose, onCopyLink, onDownload }) {
+  const isExpired = gif.expires_at ? new Date(gif.expires_at).getTime() < Date.now() : false;
+  const displayUrl = gif.url || gif.thumbnail_url;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(8,8,10,0.6)",
+        zIndex: 200, display: "flex", justifyContent: "flex-end",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 400, maxWidth: "92vw", height: "100%", background: "#15161B",
+          borderLeft: "1px solid #21232A", padding: 24, boxSizing: "border-box",
+          overflowY: "auto", animation: "gifapp-slideleft .2s ease",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700,
+              padding: "2px 8px", borderRadius: 6, background: "rgba(255,61,94,0.12)", color: "#FF3D5E",
+            }}>
+              <Icon.Share size={11} /> SHARED
+            </span>
+            <span style={{ fontSize: 12, color: "#5C5E68", fontFamily: "JetBrains Mono, monospace" }}>
+              {gif.gif_key || gif.key}
+            </span>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#5C5E68", cursor: "pointer", fontSize: 20, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{
+          height: 220, borderRadius: 12, background: "linear-gradient(135deg, #1D1F25, #14151A)",
+          display: "flex", alignItems: "center", justifyContent: "center", color: "#2A2C33", marginBottom: 20,
+          overflow: "hidden", border: "1px solid #21232A",
+        }}>
+          {displayUrl ? (
+            <img
+              src={displayUrl}
+              alt={gif.name || "Shared loop preview"}
+              style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+            />
+          ) : (
+            <div style={{ color: "#5C5E68", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+              <Icon.Film size={28} />
+              <span style={{ fontSize: 12 }}>No preview available</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <h2 style={{ fontFamily: "Space Grotesk, sans-serif", fontSize: 20, color: "#F3F1EC", margin: "0 0 6px" }}>
+            {gif.name || "Untitled loop"}
+          </h2>
+          <div style={{ fontSize: 12.5, color: "#8A8C96" }}>
+            Shared GIF loop
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <DetailStat label="Shared with" value={gif.shared_with || "—"} />
+          <DetailStat label="Owner ID" value={gif.owner_id || "—"} />
+        </div>
+
+        <div style={{
+          background: "#1D1F25", borderRadius: 10, padding: "12px 14px", border: "1px solid #21232A",
+          marginBottom: 20,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span style={{ fontSize: 11, color: "#5C5E68", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>
+              Expiration
+            </span>
+            {isExpired ? (
+              <span style={{ fontSize: 11.5, color: "#FF5C5C", fontWeight: 600 }}>Expired</span>
+            ) : !gif.expires_at ? (
+              <span style={{ fontSize: 11.5, color: "#3DDC97", fontWeight: 600 }}>Never</span>
+            ) : (
+              <span style={{ fontSize: 11.5, color: "#FFB74D", fontWeight: 600 }}>{formatExpiry(gif.expires_at)}</span>
+            )}
+          </div>
+          <div style={{ fontSize: 13, color: "#F3F1EC", fontFamily: "JetBrains Mono, monospace" }}>
+            {formatFullDateTime(gif.expires_at)}
+          </div>
+        </div>
+
+        {gif.url && (
+          <div style={{
+            background: "#14151A", border: "1px solid #21232A", borderRadius: 10, padding: "10px 12px",
+            marginBottom: 24, display: "flex", alignItems: "center", gap: 8,
+          }}>
+            <input
+              readOnly
+              value={gif.url}
+              style={{
+                background: "none", border: "none", color: "#8A8C96", fontFamily: "JetBrains Mono, monospace",
+                fontSize: 12, width: "100%", outline: "none",
+              }}
+            />
+            <Button size="sm" variant="ghost" icon={<Icon.Copy size={13} />} onClick={onCopyLink}>
+              Copy
+            </Button>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10 }}>
+          {gif.url && (
+            <Button variant="secondary" icon={<Icon.Download size={14} />} onClick={onDownload} style={{ flex: 1 }}>
+              Download
+            </Button>
+          )}
+          {gif.url && (
+            <Button variant="primary" icon={<Icon.ExternalLink size={14} />} onClick={() => window.open(gif.url, "_blank")} style={{ flex: 1 }}>
+              Open URL
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -2571,7 +3326,7 @@ function Dashboard() {
     try {
       const q = await api.getQuota();
       setQuota(q);
-    } catch (e) { /* silent */ }
+    } catch { /* silent */ }
   }, []);
 
   useEffect(() => { refreshQuota(); }, [refreshQuota]);
@@ -2593,8 +3348,9 @@ function Dashboard() {
           <div style={{ marginBottom: 20 }}>
             <QuotaBar quota={quota} />
           </div>
-          {active === "convert" && <ConverterPanel quota={quota} refreshQuota={refreshQuota} />}
-          {active === "gifs" && <GifsPanel />}
+          {active === "convert" && <ConverterPanel refreshQuota={refreshQuota} />}
+          {active === "gifs" && <GifsPanel onNavigateShared={() => setActive("shared")} />}
+          {active === "shared" && <SharedGifsPanel onNavigateGifs={() => setActive("gifs")} />}
           {active === "account" && <AccountPanel />}
         </div>
       </div>
