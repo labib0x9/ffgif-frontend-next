@@ -49,17 +49,34 @@ export function GifDetailModal({
     setCurrentGif(gif);
     setPreviewMode("gif");
 
-    if (gif && (!gif.thumbnail_url || gif.thumbnail_url.trim() === "")) {
-      api
-        .getGifThumbnail(gif.key)
-        .then((res) => {
-          if (res?.thumbnail) {
-            setCurrentGif((prev) => (prev ? { ...prev, thumbnail_url: res.thumbnail } : null));
-          }
-        })
-        .catch(() => {
-          // ignore
-        });
+    if (gif) {
+      // Ensure we have a valid direct GIF streaming/download URL to play
+      if (!gif.url || (!gif.url.startsWith("http://") && !gif.url.startsWith("https://") && !gif.url.startsWith("data:"))) {
+        api
+          .getDownloadUrl(gif.key)
+          .then((res) => {
+            if (res?.url) {
+              setCurrentGif((prev) => (prev ? { ...prev, url: res.url } : null));
+            }
+          })
+          .catch(() => {
+            // ignore
+          });
+      }
+
+      // Ensure we have the presigned thumbnail
+      if (!gif.thumbnail_url || (!gif.thumbnail_url.startsWith("http://") && !gif.thumbnail_url.startsWith("https://"))) {
+        api
+          .getGifThumbnail(gif.key)
+          .then((res) => {
+            if (res?.thumbnail) {
+              setCurrentGif((prev) => (prev ? { ...prev, thumbnail_url: res.thumbnail } : null));
+            }
+          })
+          .catch(() => {
+            // ignore
+          });
+      }
     }
   }, [gif]);
 
@@ -70,8 +87,12 @@ export function GifDetailModal({
     previewMode === "thumbnail" && currentGif.thumbnail_url
       ? currentGif.thumbnail_url
       : currentGif.url || currentGif.thumbnail_url || null;
-  const displayUrl = rawUrl && rawUrl.trim().length > 0 ? rawUrl : null;
-  const hasThumb = currentGif.thumbnail_url && currentGif.thumbnail_url.trim().length > 0;
+  const displayUrl =
+    rawUrl && (rawUrl.startsWith("http://") || rawUrl.startsWith("https://") || rawUrl.startsWith("data:") || rawUrl.startsWith("/"))
+      ? rawUrl
+      : null;
+  const hasThumb =
+    currentGif.thumbnail_url && (currentGif.thumbnail_url.startsWith("http://") || currentGif.thumbnail_url.startsWith("https://"));
 
   const handleCopy = async () => {
     if (!displayUrl) {
@@ -128,37 +149,37 @@ export function GifDetailModal({
         {/* GIF / Thumbnail Preview Switcher Header */}
         {hasThumb && (
           <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-400 font-medium">Preview Mode</span>
+            <span className="text-xs text-slate-400 font-medium">Viewing Mode</span>
             <div className="flex items-center p-1 rounded-xl bg-surface-50 border border-white/5 text-xs">
               <button
                 type="button"
                 onClick={() => setPreviewMode("gif")}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-semibold transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
                   previewMode === "gif"
                     ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
                     : "text-slate-400 hover:text-white"
                 }`}
               >
                 <Film className="w-3.5 h-3.5" />
-                <span>GIF</span>
+                <span>Playing GIF</span>
               </button>
               <button
                 type="button"
                 onClick={() => setPreviewMode("thumbnail")}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-semibold transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
                   previewMode === "thumbnail"
                     ? "bg-indigo-600 text-white shadow-md shadow-indigo-600/30"
                     : "text-slate-400 hover:text-white"
                 }`}
               >
                 <ImageIcon className="w-3.5 h-3.5" />
-                <span>Thumbnail</span>
+                <span>Static Thumbnail</span>
               </button>
             </div>
           </div>
         )}
 
-        {/* Media Preview Screen */}
+        {/* Media Preview Screen - Plays the GIF */}
         <div className="relative aspect-video max-h-[400px] w-full rounded-2xl bg-black/90 border border-white/10 flex items-center justify-center overflow-hidden p-2">
           {displayUrl ? (
             <img
@@ -168,9 +189,9 @@ export function GifDetailModal({
               className="max-h-full max-w-full object-contain rounded-lg shadow-2xl animate-in fade-in duration-200"
             />
           ) : (
-            <div className="flex flex-col items-center justify-center gap-2 text-slate-500">
-              <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
-              <span className="text-xs">Loading media...</span>
+            <div className="flex flex-col items-center justify-center gap-2 text-slate-400">
+              <Loader2 className="w-7 h-7 animate-spin text-indigo-400" />
+              <span className="text-xs font-medium">Loading GIF animation...</span>
             </div>
           )}
         </div>

@@ -56,7 +56,7 @@ export function Topbar({ onOpenMobileMenu }: TopbarProps) {
   }, []);
 
   return (
-    <header className="sticky top-0 z-30 h-18 bg-surface-200/80 backdrop-blur-xl border-b border-white/10 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
+    <header className="sticky top-0 z-40 h-18 bg-surface-200/95 backdrop-blur-xl border-b border-white/10 px-4 sm:px-6 lg:px-8 flex items-center justify-between">
       {/* Left: Mobile Menu & Page Title */}
       <div className="flex items-center gap-3 sm:gap-4">
         <button
@@ -119,9 +119,9 @@ export function Topbar({ onOpenMobileMenu }: TopbarProps) {
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 hidden sm:block" />
           </button>
 
-          {/* Dropdown Menu */}
+          {/* Dropdown Menu - fully opaque and high z-index */}
           {dropdownOpen && (
-            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-surface-100 border border-white/10 p-2 shadow-2xl shadow-black/80 z-50 animate-in fade-in zoom-in-95 duration-150">
+            <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-[#141620] border border-white/15 p-2 shadow-2xl shadow-black/95 z-50 animate-in fade-in zoom-in-95 duration-150">
               <div className="px-3 py-2.5 border-b border-white/5 mb-1">
                 <p className="text-xs font-bold text-white truncate">
                   {user?.fullname || user?.username || "FFgif User"}
