@@ -20,6 +20,9 @@ import type {
   DownloadResponse,
   SharedGifItem,
   SharePayload,
+  CreateShareByTokenRequest,
+  CreateShareByTokenResponse,
+  SharedGifTokenResponse,
   ApiError,
   RateLimitInfo,
 } from "@/types";
@@ -624,6 +627,26 @@ export const api = {
         method: "DELETE",
       }
     );
+  },
+
+  // ---- Token-Based Sharing ----
+  /**
+   * POST /s - Generates a share token and queues an email notification with /s/{token}
+   */
+  async createShareToken(payload: CreateShareByTokenRequest): Promise<CreateShareByTokenResponse> {
+    return request<CreateShareByTokenResponse>("/s", {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  /**
+   * GET /s/{token} - Fetches shared GIF details using a valid share token (Public endpoint, no auth required)
+   */
+  async getSharedGifByToken(token: string): Promise<SharedGifTokenResponse> {
+    return request<SharedGifTokenResponse>(`/s/${encodeURIComponent(token)}`, {
+      authed: false,
+    });
   },
 };
 

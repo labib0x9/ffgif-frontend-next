@@ -145,6 +145,25 @@ export interface SharePayload {
   expire_at: string;
 }
 
+export interface CreateShareByTokenRequest {
+  gif_key: string;
+  email: string;
+  expire_at: string; // ISO 8601 string
+}
+
+export interface CreateShareByTokenResponse {
+  token: string;
+}
+
+export interface SharedGifTokenResponse {
+  gif_key: string;
+  name: string;
+  url: string;
+  thumbnail_url: string;
+  expires_at: string | null;
+  created_at: string;
+}
+
 export type ApiErrorCode =
   | "VALIDATION_FAILED"
   | "PRECONDITION_FAILED"

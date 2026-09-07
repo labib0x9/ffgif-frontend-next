@@ -212,6 +212,9 @@ src/
 │   │   ├── library/page.tsx           # GIF Library grid, search, sort, filter tabs, detail drawer
 │   │   ├── shared/page.tsx            # Shared Hub with expiration timers & access revocation
 │   │   └── settings/page.tsx          # User profile, password update, quota meters, danger zone
+│   ├── s/
+│   │   ├── page.tsx                   # Share token portal & fallback redirect
+│   │   └── [token]/page.tsx           # Dedicated token-based GIF viewer & downloader (/s/{token})
 │   ├── layout.tsx                     # Global Root Layout (Providers, Metadata, Viewport)
 │   ├── page.tsx                       # High-converting Landing Page with Hero & Interactive Demo
 │   ├── globals.css                    # Tailwind CSS, custom dark theme, glassmorphism
@@ -219,7 +222,8 @@ src/
 ├── components/
 │   ├── auth/                          # AuthCard container with ambient neon effects
 │   ├── layout/                        # Sidebar and Topbar navigation components
-│   ├── library/                       # GifCard, GifDetailModal, ShareModal
+│   ├── library/                       # GifCard, GifDetailModal, ShareModal (with token share link generation)
+│   ├── shared/                        # SharedGifTokenClient (authenticated expiring link viewer)
 │   ├── studio/                        # UploadDropzone, VideoTrimmer, ConversionSettings,
 │   │                                  # ConvertingModal, GifResultViewer
 │   └── ui/                            # Button, Input, Badge, Modal, ProgressBar, ConfirmModal
@@ -281,6 +285,10 @@ The frontend interacts with the following backend REST routes:
 - `POST /gifs/me/{key}/shares` - Share GIF with another user (upserts/renews expiration)
 - `GET /gifs/me/shares` - List active shared GIF records
 - `DELETE /gifs/me/{key}/shares/{userId}` - Revoke share access
+
+### Token-Based Expiring Link Sharing
+- `POST /s` - Generate token share link & queue automated email notification to recipient (Auth Required: Bearer JWT; `{ gif_key, email, expire_at }` ➔ `201 Created` with `{ token }`)
+- `GET /s/{token}` - Retrieve shared GIF playback & metadata via public token without authentication (`{ gif_key, name, url, thumbnail_url, expires_at, created_at }`)
 
 ---
 
