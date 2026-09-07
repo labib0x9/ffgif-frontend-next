@@ -1,15 +1,23 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Lock, KeyRound, Check, X, CheckCircle2, AlertCircle, ArrowRight } from "lucide-react";
+import {
+  Lock,
+  KeyRound,
+  Check,
+  X,
+  CheckCircle2,
+  AlertCircle,
+  ArrowRight,
+  Loader2,
+} from "lucide-react";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
-
 import { getApiErrorMessage } from "@/lib/errors";
 
 function ResetPasswordForm() {
@@ -19,17 +27,36 @@ function ResetPasswordForm() {
   const [token, setToken] = useState(tokenFromUrl);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [isValidatingToken, setIsValidatingToken] = useState(false);
+  const [isTokenValid, setIsTokenValid] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const { success: toastSuccess, error: toastError } = useToast();
 
+  const validateToken = useCallback(async (tokenToValidate: string) => {
+    if (!tokenToValidate) return;
+    setIsValidatingToken(true);
+    setErrorMessage(null);
+    try {
+      await api.validateResetToken(tokenToValidate);
+      setIsTokenValid(true);
+    } catch (err: any) {
+      setIsTokenValid(false);
+      const msg = getApiErrorMessage(err, "This password reset token has expired or is invalid.");
+      setErrorMessage(msg);
+    } finally {
+      setIsValidatingToken(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (tokenFromUrl) {
       setToken(tokenFromUrl);
+      validateToken(tokenFromUrl);
     }
-  }, [tokenFromUrl]);
+  }, [tokenFromUrl, validateToken]);
 
   const isLengthValid = password.length >= 5 && password.length <= 70;
   const hasSpecialChar = /[!@#$%^&*]/.test(password);
@@ -48,7 +75,7 @@ function ResetPasswordForm() {
 
     try {
       await api.resetPassword({
-        token,
+        token: token.trim(),
         password,
         confirm_password: confirmPassword,
       });
@@ -62,6 +89,52 @@ function ResetPasswordForm() {
       setIsLoading(false);
     }
   };
+
+  if (isValidatingToken) {
+    return (
+      <AuthCard
+        title="Validating Token"
+        subtitle="Checking security token validity..."
+      >
+        <div className="text-center py-8 space-y-4">
+          <Loader2 className="w-12 h-12 text-indigo-400 animate-spin mx-auto" />
+          <p className="text-xs text-slate-400">Verifying your password reset link.</p>
+        </div>
+      </AuthCard>
+    );
+  }
+
+  if (isTokenValid === false) {
+    return (
+      <AuthCard
+        title="Invalid Reset Link"
+        subtitle="The password reset link is invalid or has expired."
+      >
+        <div className="space-y-4 text-center py-4">
+          <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-3">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <div className="text-left space-y-1">
+              <strong className="font-semibold text-white block">Reset Token Expired</strong>
+              <p>{errorMessage || "This password reset token has expired or is invalid."}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
+            <Link href="/forgot-password" className="w-full sm:w-auto flex-1">
+              <Button variant="primary" size="md" className="w-full" rightIcon={<ArrowRight className="w-4 h-4" />}>
+                Request New Link
+              </Button>
+            </Link>
+            <Link href="/login" className="w-full sm:w-auto">
+              <Button variant="secondary" size="md" className="w-full">
+                Back to Sign In
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </AuthCard>
+    );
+  }
 
   if (isSuccess) {
     return (
