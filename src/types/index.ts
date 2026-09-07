@@ -4,6 +4,8 @@ export interface User {
   fullname: string;
   email: string;
   verified: boolean;
+  updated_at?: string;
+  etag?: string;
 }
 
 export interface UserQuota {
@@ -84,7 +86,8 @@ export interface ConvertPayload {
 
 export interface ConvertJobResponse {
   job_id: string;
-  status: "queued";
+  status: "queued" | string;
+  location?: string;
 }
 
 export type ConversionStatus = "queued" | "converting" | "completed" | "failed";
@@ -95,6 +98,7 @@ export interface ConvertStatusResponse {
   gif_id?: string;
   progress?: number;
   updated_at?: string;
+  etag?: string;
 }
 
 export interface GifItem {
@@ -106,6 +110,8 @@ export interface GifItem {
   thumbnail_url?: string;
   download?: number;
   created_at: string;
+  updated_at?: string;
+  etag?: string;
 }
 
 export interface GifThumbnailResponse {
@@ -139,9 +145,30 @@ export interface SharePayload {
   expire_at: string;
 }
 
+export type ApiErrorCode =
+  | "VALIDATION_FAILED"
+  | "PRECONDITION_FAILED"
+  | "AUTH_INVALID_CREDENTIALS"
+  | "AUTH_USER_NOT_VERIFIED"
+  | "AUTH_USER_EXISTS"
+  | "AUTH_USER_NOT_FOUND"
+  | "AUTH_RESET_TOKEN_INVALID"
+  | "AUTH_VERIFY_TOKEN_INVALID"
+  | "GIF_NOT_FOUND"
+  | "GIF_FORBIDDEN"
+  | "JOB_NOT_FOUND"
+  | "SHARE_NOT_FOUND"
+  | "SHARE_FORBIDDEN"
+  | "RATE_LIMITED"
+  | string;
+
 export interface ApiError {
-  error: string;
-  code: number;
+  error_code?: ApiErrorCode;
+  message: string;
+  status: number;
+  code?: number;
+  error?: string;
+  detail?: unknown;
 }
 
 export interface RateLimitInfo {
@@ -150,3 +177,4 @@ export interface RateLimitInfo {
   reset?: string | null;
   retryAfter?: string | null;
 }
+

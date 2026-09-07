@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Mail, Calendar, Clock, Share2, ShieldCheck } from "lucide-react";
 import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
+import { getApiErrorMessage } from "@/lib/errors";
 
 export interface ShareModalProps {
   isOpen: boolean;
@@ -62,12 +63,12 @@ export function ShareModal({
         expire_at,
       });
 
-      toastSuccess("GIF Shared Successfully!", `Access granted to ${email}.`);
+      toastSuccess("GIF Access Granted!", `Access active/renewed for ${email}.`);
       onShared?.();
       onClose();
       setEmail("");
     } catch (err: any) {
-      toastError("Share Failed", err?.error || "Could not share this GIF. Ensure user exists.");
+      toastError("Share Failed", getApiErrorMessage(err, "Could not share this GIF. Ensure user exists."));
     } finally {
       setIsLoading(false);
     }

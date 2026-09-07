@@ -12,6 +12,7 @@ import { formatBytes, formatDuration } from "@/lib/utils";
 import { api, MAX_UPLOAD_BYTES } from "@/lib/api";
 import { LastUploadMetadata } from "@/types";
 import { useToast } from "@/context/ToastContext";
+import { getApiErrorMessage } from "@/lib/errors";
 
 export interface UploadDropzoneProps {
   onVideoReady: (videoData: {
@@ -126,7 +127,7 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
     } catch (err: any) {
       setUploadProgress(null);
       setProcessingStatus(null);
-      toastError("Upload Failed", err?.error || "Could not complete video upload.");
+      toastError("Upload Failed", getApiErrorMessage(err, "Could not complete video upload."));
     }
   };
 
@@ -143,7 +144,7 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
         duration: lastUpload.duration_sec || 10,
       });
     } catch (err: any) {
-      toastError("Error Loading Video", err?.error || "Could not load stream URL for last video.");
+      toastError("Error Loading Video", getApiErrorMessage(err, "Could not load stream URL for last video."));
     } finally {
       setIsLoadingLast(false);
     }

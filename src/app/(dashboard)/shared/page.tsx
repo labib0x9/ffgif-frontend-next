@@ -19,6 +19,8 @@ import { api } from "@/lib/api";
 import { formatDate, getRemainingTime, isExpired } from "@/lib/utils";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 export default function SharedHubPage() {
   const [sharedGifs, setSharedGifs] = useState<SharedGifItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,7 +38,7 @@ export default function SharedHubPage() {
       const data = await api.listSharedGifs();
       setSharedGifs(Array.isArray(data) ? data : []);
     } catch (err: any) {
-      toastError("Failed to Load Shared GIFs", err?.error || "Could not fetch shared records.");
+      toastError("Failed to Load Shared GIFs", getApiErrorMessage(err, "Could not fetch shared records."));
       setSharedGifs([]);
     } finally {
       setIsLoading(false);
@@ -67,7 +69,7 @@ export default function SharedHubPage() {
       toastSuccess("Access Revoked", `Revoked access for ${revokeItem.shared_with}.`);
       setRevokeItem(null);
     } catch (err: any) {
-      toastError("Revoke Failed", err?.error || "Could not revoke share access.");
+      toastError("Revoke Failed", getApiErrorMessage(err, "Could not revoke share access."));
     } finally {
       setIsRevoking(false);
     }

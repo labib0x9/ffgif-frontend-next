@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 function ResetPasswordForm() {
   const searchParams = useSearchParams();
   const tokenFromUrl = searchParams.get("token") || "";
@@ -53,7 +55,7 @@ function ResetPasswordForm() {
       setIsSuccess(true);
       toastSuccess("Password Updated", "Your password has been successfully reset.");
     } catch (err: any) {
-      const msg = err?.code === 410 ? "This reset token is invalid or expired." : err?.error || "Failed to update password.";
+      const msg = getApiErrorMessage(err, "Failed to update password. Reset token may be invalid or expired.");
       setErrorMessage(msg);
       toastError("Reset Failed", msg);
     } finally {

@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -27,9 +29,9 @@ export default function ForgotPasswordPage() {
     try {
       await api.forgotPassword(email);
       setIsSent(true);
-      toastSuccess("Check your inbox", "A password reset link has been dispatched.");
+      toastSuccess("Check your inbox", "A password reset link has been dispatched (202 Accepted).");
     } catch (err: any) {
-      const msg = err?.code === 404 ? "No account found with this email address." : err?.error || "Failed to process request.";
+      const msg = getApiErrorMessage(err, "Failed to process password reset request.");
       setErrorMessage(msg);
       toastError("Request Failed", msg);
     } finally {

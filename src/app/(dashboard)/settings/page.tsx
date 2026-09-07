@@ -21,9 +21,10 @@ import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { formatBytes } from "@/lib/utils";
+import { getApiErrorMessage, isPreconditionError } from "@/lib/errors";
 
 export default function SettingsPage() {
-  const { user, quota, updateUser, refreshQuota, logout } = useAuth();
+  const { user, quota, updateUser, refreshProfile, refreshQuota, logout } = useAuth();
   const { success: toastSuccess, error: toastError } = useToast();
 
   // Profile Edit State
@@ -33,6 +34,17 @@ export default function SettingsPage() {
     avatar_url: user?.avatar_url || "",
   });
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // Sync profile form when user updates
+  React.useEffect(() => {
+    if (user) {
+      setProfileForm({
+        username: user.username || "",
+        fullname: user.fullname || "",
+        avatar_url: user.avatar_url || "",
+      });
+    }
+  }, [user]);
 
   // Password Change State
   const [passwordForm, setPasswordForm] = useState({
@@ -50,16 +62,41 @@ export default function SettingsPage() {
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingProfile(true);
+
+    // Send only editable fields for partial update
+    const patchPayload: Partial<Pick<typeof profileForm, "username" | "fullname" | "avatar_url">> = {};
+    if (profileForm.username !== undefined) patchPayload.username = profileForm.username;
+    if (profileForm.fullname !== undefined) patchPayload.fullname = profileForm.fullname;
+    if (profileForm.avatar_url !== undefined) patchPayload.avatar_url = profileForm.avatar_url;
+
+    const ifMatch = user?.updated_at || user?.etag;
+
     try {
-      await api.updateProfile({
-        ...profileForm,
-        email: user?.email || "",
-        verified: user?.verified || false,
-      });
-      updateUser(profileForm);
+      const updatedUser = await api.updateProfile(patchPayload, ifMatch);
+      if (updatedUser) {
+        updateUser(updatedUser);
+      } else {
+        updateUser(profileForm);
+      }
       toastSuccess("Profile Updated", "Your account profile was successfully updated.");
     } catch (err: any) {
-      toastError("Update Failed", err?.error || "Could not update profile.");
+      if (isPreconditionError(err)) {
+        toastError(
+          "Update Conflict (412)",
+          "Profile was updated in another session. Refreshing your profile with the latest data."
+        );
+        const latest = await refreshProfile();
+        if (latest) {
+          setProfileForm({
+            username: latest.username || "",
+            fullname: latest.fullname || "",
+            avatar_url: latest.avatar_url || "",
+          });
+        }
+      } else {
+        const msg = getApiErrorMessage(err, "Could not update profile.");
+        toastError("Update Failed", msg);
+      }
     } finally {
       setIsSavingProfile(false);
     }
@@ -78,7 +115,7 @@ export default function SettingsPage() {
       toastSuccess("Password Changed", "Your password has been changed successfully.");
       setPasswordForm({ current_password: "", password: "", confirm_password: "" });
     } catch (err: any) {
-      toastError("Password Change Failed", err?.error || "Could not change password. Check current password.");
+      toastError("Password Change Failed", getApiErrorMessage(err, "Could not change password. Check current password."));
     } finally {
       setIsChangingPassword(false);
     }
@@ -97,7 +134,7 @@ export default function SettingsPage() {
       toastSuccess("Account Deleted", "Your FFgif account and data have been removed.");
       logout();
     } catch (err: any) {
-      toastError("Deletion Failed", err?.error || "Incorrect password or failed to delete account.");
+      toastError("Deletion Failed", getApiErrorMessage(err, "Incorrect password or failed to delete account."));
     } finally {
       setIsDeletingAccount(false);
     }

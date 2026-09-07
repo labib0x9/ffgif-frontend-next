@@ -11,6 +11,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,15 +42,10 @@ function LoginForm() {
         toastSuccess("Welcome back!", "Signed in successfully.");
         router.push(redirectPath);
       } else {
-        throw { code: 500, error: "Missing token in login response" };
+        throw { status: 500, code: 500, message: "Missing token in login response" };
       }
     } catch (err: any) {
-      const msg =
-        err?.code === 401
-          ? "Invalid email or password. Please try again."
-          : err?.code === 403
-          ? "Account not verified. Please check your inbox or resend verification."
-          : err?.error || "Login failed. Please verify credentials.";
+      const msg = getApiErrorMessage(err, "Login failed. Please verify credentials.");
       setErrorMessage(msg);
       toastError("Login Failed", msg);
     } finally {
@@ -57,8 +54,8 @@ function LoginForm() {
   };
 
   const handlePrefillDemo = () => {
-    setEmail("demo@ffgif.io");
-    setPassword("DemoPass123!");
+    setEmail("anonymous@ffgif.local");
+    setPassword("anonymous@ffgif");
     setErrorMessage(null);
   };
 
@@ -89,7 +86,7 @@ function LoginForm() {
         <Input
           label="Email Address"
           type="email"
-          placeholder="you@example.com"
+          placeholder="anonymous@ffgif.local"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           leftIcon={<Mail className="w-4 h-4" />}
@@ -109,7 +106,7 @@ function LoginForm() {
           </div>
           <Input
             type="password"
-            placeholder="••••••••"
+            placeholder="anonymous@ffgif"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             leftIcon={<Lock className="w-4 h-4" />}
@@ -133,10 +130,15 @@ function LoginForm() {
           <button
             type="button"
             onClick={handlePrefillDemo}
-            className="w-full py-2 px-3 rounded-xl bg-surface-50 hover:bg-surface-100 border border-white/5 text-[11px] text-slate-300 hover:text-white flex items-center justify-center gap-1.5 transition-colors"
+            className="w-full py-2.5 px-3 rounded-xl bg-surface-50 hover:bg-surface-100 border border-white/5 text-[11px] text-slate-300 hover:text-white flex items-center justify-between transition-colors group"
           >
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Prefill Demo Credentials</span>
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400 group-hover:scale-110 transition-transform" />
+              <span className="font-semibold text-white">Prefill Demo Account</span>
+            </div>
+            <span className="font-mono text-[10px] text-slate-400 group-hover:text-indigo-300">
+              anonymous@ffgif.local
+            </span>
           </button>
         </div>
       </form>

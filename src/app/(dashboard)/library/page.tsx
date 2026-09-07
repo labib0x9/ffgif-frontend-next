@@ -23,6 +23,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage, isPreconditionError } from "@/lib/errors";
+
 type TabType = "all" | "public" | "private" | "recents";
 
 export default function LibraryPage() {
@@ -58,7 +60,7 @@ export default function LibraryPage() {
         }
       }
     } catch (err: any) {
-      toastError("Failed to Load GIFs", err?.error || "Could not fetch GIFs from library.");
+      toastError("Failed to Load GIFs", getApiErrorMessage(err, "Could not fetch GIFs from library."));
       setGifs([]);
     } finally {
       setIsLoading(false);
@@ -71,8 +73,9 @@ export default function LibraryPage() {
 
   const handleToggleVisibility = async (targetGif: GifItem) => {
     const nextStatus = targetGif.status === "public" ? "private" : "public";
+    const ifMatch = targetGif.updated_at || targetGif.etag;
     try {
-      await api.updateGifVisibility(targetGif.key, { status: nextStatus });
+      await api.updateGifVisibility(targetGif.key, { status: nextStatus }, ifMatch);
       setGifs((prev) =>
         prev.map((g) => (g.key === targetGif.key ? { ...g, status: nextStatus } : g))
       );
@@ -81,7 +84,12 @@ export default function LibraryPage() {
       }
       toastSuccess("Visibility Updated", `GIF marked as ${nextStatus}.`);
     } catch (err: any) {
-      toastError("Error", err?.error || "Could not update visibility.");
+      if (isPreconditionError(err)) {
+        toastError("Conflict (412)", "GIF was modified elsewhere. Refreshing library...");
+        fetchGifs();
+      } else {
+        toastError("Error", getApiErrorMessage(err, "Could not update visibility."));
+      }
     }
   };
 
@@ -98,7 +106,7 @@ export default function LibraryPage() {
       refreshQuota();
       toastSuccess("Deleted", "GIF removed from library.");
     } catch (err: any) {
-      toastError("Delete Failed", err?.error || "Could not delete GIF.");
+      toastError("Delete Failed", getApiErrorMessage(err, "Could not delete GIF."));
     } finally {
       setIsDeleting(false);
     }

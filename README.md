@@ -225,9 +225,11 @@ src/
 │   └── ui/                            # Button, Input, Badge, Modal, ProgressBar, ConfirmModal
 ├── context/
 │   ├── AuthContext.tsx                # Reactive auth, user profile & quota state
-│   └── ToastContext.tsx               # Floating glassmorphic toast notification system
+│   ├── ToastContext.tsx               # Floating glassmorphic toast notification system
+│   └── index.ts                       # Context barrel exports
 ├── lib/
-│   ├── api.ts                         # Complete typed API client (Auth, MinIO, Convert, Shares)
+│   ├── api.ts                         # Complete typed API client (Auth, MinIO, Jobs, OCC, Shares)
+│   ├── errors.ts                      # Centralized standardized error parsing & code mapping
 │   └── utils.ts                       # Helpers, formatters (bytes, duration, dates, cn)
 └── types/
     └── index.ts                       # Complete TypeScript definitions
@@ -242,16 +244,16 @@ The frontend interacts with the following backend REST routes:
 ### Authentication
 - `POST /auth/signup` - Register a new account
 - `GET /auth/verify?token=...` - Verify account email
-- `POST /auth/verify/resend` - Resend verification email
+- `POST /auth/verify/resend` - Resend verification email (202 Accepted)
 - `POST /auth/login` - Sign in and retrieve JWT Bearer token
-- `POST /auth/forgot-password` - Request password reset email
+- `POST /auth/forgot-password` - Request password reset email (202 Accepted)
 - `GET /auth/reset?token=...` - Validate reset token
 - `POST /auth/reset` - Set new password
-- `GET /auth/logout` - Invalidate token (Redis blocklist)
+- `POST /auth/logout` - Invalidate token (Redis blocklist)
 
 ### User Profile & Quotas
-- `GET /users/profile/me` - Fetch profile metadata
-- `PATCH /users/profile/me` - Update profile (username, fullname, avatar_url)
+- `GET /users/profile/me` - Fetch profile metadata with ETag
+- `PATCH /users/profile/me` - Update profile with `If-Match: <updated_at>` (username, fullname, avatar_url)
 - `GET /users/me/quota` - Fetch storage bytes & GIF count limits
 - `PATCH /users/change-password` - Change account password
 - `DELETE /users/me` - Delete account
@@ -263,21 +265,21 @@ The frontend interacts with the following backend REST routes:
 - `GET /uploads/{key}/stream` - Get streaming video playback URL
 - `GET /uploads/last` - Get metadata of last uploaded video
 
-### GIF Conversion Engine
-- `POST /convert` - Submit conversion parameters (`upload_key`, `start_time`, `end_time`, `fps`, `width`, `loop`)
-- `GET /convert/{jobId}/status` - Poll conversion status (`queued` | `converting` | `completed` | `failed`)
+### GIF Conversion Engine & Jobs
+- `POST /jobs` - Submit conversion parameters (`upload_key`, `start_time`, `end_time`, `fps`, `width`, `loop`) -> 202 Accepted
+- `GET /jobs/{jobId}/status` - Poll conversion status (`queued` | `converting` | `completed` | `failed`)
 
 ### Library & Sharing
 - `GET /gifs/me?status=all` - Fetch user GIFs (`all`, `public`, `private`)
 - `GET /gifs/me/recents` - Fetch recent conversions
-- `GET /gifs/me/{key}` - Get single GIF metadata
+- `GET /gifs/me/{key}` - Get single GIF metadata with ETag
 - `GET /gifs/me/{key}/thumbnail` - Get presigned thumbnail image URL
 - `GET /gifs/me/{key}/download` - Get presigned direct download URL
-- `PATCH /gifs/me/{key}` - Toggle visibility (`public` / `private`)
+- `PATCH /gifs/me/{key}` - Partial update with `If-Match: <updated_at>` (`status`, `name`, `persist`)
 - `DELETE /gifs/me/{key}` - Delete GIF
 - `POST /gifs/me/recents/{key}/save` - Save temporary conversion into permanent library
-- `POST /gifs/me/{key}/shares` - Share GIF with another user by email with expiration
-- `GET /gifs/me/shares` - List shared GIF records
+- `POST /gifs/me/{key}/shares` - Share GIF with another user (upserts/renews expiration)
+- `GET /gifs/me/shares` - List active shared GIF records
 - `DELETE /gifs/me/{key}/shares/{userId}` - Revoke share access
 
 ---

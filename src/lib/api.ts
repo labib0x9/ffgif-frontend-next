@@ -43,9 +43,21 @@ export function getAuthToken(): string | null {
   return authToken;
 }
 
-interface RequestOptions {
+/**
+ * Generate a unique Request ID (UUID v4) for distributed tracing.
+ */
+function generateRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "req-" + Date.now().toString(36) + "-" + Math.random().toString(36).substring(2, 9);
+}
+
+export interface RequestOptions {
   method?: string;
   body?: unknown;
+  headers?: Record<string, string>;
+  ifMatch?: string;
   authed?: boolean;
   raw?: boolean;
   skipUnauthorizedEvent?: boolean;
@@ -56,17 +68,33 @@ export async function request<T = unknown>(
   {
     method = "GET",
     body,
+    headers: customHeaders = {},
+    ifMatch,
     authed = true,
     raw = false,
     skipUnauthorizedEvent = false,
   }: RequestOptions = {}
 ): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (body !== undefined && !raw) {
+  const headers: Record<string, string> = { ...customHeaders };
+
+  // Set X-Request-Id header for end-to-end tracing if not provided
+  if (!headers["X-Request-Id"]) {
+    headers["X-Request-Id"] = generateRequestId();
+  }
+
+  // Set Content-Type for JSON payloads
+  if (body !== undefined && !raw && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
+
+  // Set Authorization Bearer header
   if (authed && authToken) {
     headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  // Set If-Match header for Optimistic Concurrency Control (OCC)
+  if (ifMatch) {
+    headers["If-Match"] = ifMatch.replace(/^"|"$/g, "");
   }
 
   let res: Response;
@@ -77,7 +105,12 @@ export async function request<T = unknown>(
       body: body === undefined ? undefined : raw ? (body as BodyInit) : JSON.stringify(body),
     });
   } catch {
-    const error: ApiError = { code: 0, error: "Unable to connect to FFgif server. Please check your network or backend status." };
+    const error: ApiError = {
+      status: 0,
+      code: 0,
+      message: "Unable to connect to FFgif server. Please check your network or backend status.",
+      error: "Unable to connect to FFgif server. Please check your network or backend status.",
+    };
     throw error;
   }
 
@@ -89,6 +122,13 @@ export async function request<T = unknown>(
     retryAfter: res.headers.get("Retry-After"),
   };
 
+  // Capture ETag header if returned (unquoted)
+  const rawEtag = res.headers.get("ETag");
+  const etag = rawEtag ? rawEtag.replace(/^"|"$/g, "") : undefined;
+
+  // Capture Location header if returned (e.g., /jobs/{jobId}/status or /users/{userId})
+  const locationHeader = res.headers.get("Location") || undefined;
+
   const text = await res.text();
   let parsed: any = null;
   if (text) {
@@ -99,6 +139,7 @@ export async function request<T = unknown>(
     }
   }
 
+  // Handle 429 Too Many Requests
   if (res.status === 429) {
     if (typeof window !== "undefined") {
       window.dispatchEvent(
@@ -107,31 +148,78 @@ export async function request<T = unknown>(
         })
       );
     }
+    const message =
+      parsed && typeof parsed === "object" && (parsed.message || parsed.error)
+        ? parsed.message || parsed.error
+        : "Too many requests. Rate limit reached. Please wait a moment.";
+
     const error: ApiError = {
+      error_code: "RATE_LIMITED",
+      message,
+      status: 429,
       code: 429,
-      error: (parsed && typeof parsed === "object" && parsed.error) ? parsed.error : "Too many requests. Rate limit reached. Please wait a moment.",
+      error: message,
     };
     throw error;
   }
 
+  // Handle Non-OK responses (4xx, 5xx) with standardized error envelope: { error_code, message, status }
   if (!res.ok) {
     if (res.status === 401 && authed && !skipUnauthorizedEvent && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("ffgif:unauthorized"));
     }
 
-    if (parsed && typeof parsed === "object" && parsed.error) {
+    if (parsed && typeof parsed === "object") {
+      const errorCode = parsed.error_code || (typeof parsed.code === "string" ? parsed.code : undefined);
+      const message =
+        parsed.message ||
+        parsed.error ||
+        (res.status === 412
+          ? "Precondition Failed: Resource was updated elsewhere. Please refresh."
+          : res.status === 422
+          ? "Validation Failed: Please verify your form inputs."
+          : "An unexpected server error occurred.");
+
+      const status = parsed.status ?? (typeof parsed.code === "number" ? parsed.code : res.status);
+
       const error: ApiError = {
-        code: parsed.code ?? res.status,
-        error: parsed.error,
+        error_code: errorCode,
+        message,
+        status,
+        code: status,
+        error: message,
+        detail: parsed.detail || parsed,
       };
       throw error;
     }
 
+    const defaultMsg =
+      res.status === 412
+        ? "Precondition Failed: Resource was updated elsewhere. Please refresh."
+        : res.status === 422
+        ? "Validation Failed: Please verify your input."
+        : typeof parsed === "string" && parsed
+        ? parsed
+        : "An unexpected server error occurred.";
+
     const error: ApiError = {
+      error_code: res.status === 412 ? "PRECONDITION_FAILED" : res.status === 422 ? "VALIDATION_FAILED" : undefined,
+      message: defaultMsg,
+      status: res.status,
       code: res.status,
-      error: typeof parsed === "string" && parsed ? parsed : "An unexpected server error occurred.",
+      error: defaultMsg,
     };
     throw error;
+  }
+
+  // If response is an object, attach ETag if present
+  if (parsed && typeof parsed === "object") {
+    if (etag && !parsed.etag) {
+      parsed.etag = etag;
+    }
+    if (locationHeader && !parsed.location) {
+      parsed.location = locationHeader;
+    }
   }
 
   return parsed as T;
@@ -193,9 +281,12 @@ export const api = {
     });
   },
 
+  /**
+   * POST /auth/logout with Bearer token
+   */
   async logout(): Promise<string> {
     return request<string>("/auth/logout", {
-      method: "GET",
+      method: "POST",
       authed: true,
     });
   },
@@ -205,10 +296,17 @@ export const api = {
     return request<User>("/users/profile/me");
   },
 
-  async updateProfile(payload: Partial<User>): Promise<User> {
+  /**
+   * PATCH /users/profile/me with optimistic locking (If-Match: <updated_at>) and partial fields
+   */
+  async updateProfile(
+    payload: Partial<Pick<User, "username" | "fullname" | "email" | "avatar_url">>,
+    ifMatch?: string
+  ): Promise<User> {
     return request<User>("/users/profile/me", {
       method: "PATCH",
       body: payload,
+      ifMatch,
     });
   },
 
@@ -266,7 +364,9 @@ export const api = {
           resolve();
         } else {
           reject({
+            status: xhr.status,
             code: xhr.status,
+            message: `Direct storage upload failed with status ${xhr.status}`,
             error: `Direct storage upload failed with status ${xhr.status}`,
           });
         }
@@ -274,7 +374,9 @@ export const api = {
 
       xhr.onerror = () => {
         reject({
+          status: 0,
           code: 0,
+          message: "Network error during direct storage upload",
           error: "Network error during direct storage upload",
         });
       };
@@ -302,12 +404,22 @@ export const api = {
       const data = await this.getUploadStatus(key);
       if (data.status === "ok") return data;
       if (data.status === "failed") {
-        throw { code: 500, error: "Video preprocessing failed on server" };
+        throw {
+          status: 500,
+          code: 500,
+          message: "Video preprocessing failed on server",
+          error: "Video preprocessing failed on server",
+        };
       }
       attempts++;
       await new Promise((res) => setTimeout(res, intervalMs));
     }
-    throw { code: 408, error: "Upload processing timeout" };
+    throw {
+      status: 408,
+      code: 408,
+      message: "Upload processing timeout",
+      error: "Upload processing timeout",
+    };
   },
 
   async getStreamUrl(key: string): Promise<StreamResponse> {
@@ -318,16 +430,41 @@ export const api = {
     return request<LastUploadMetadata>("/uploads/last");
   },
 
-  // ---- GIF Conversion ----
+  // ---- GIF Conversion & Jobs ----
+  /**
+   * POST /jobs (was /convert) - Returns 202 Accepted with Location header / job response
+   */
   async convert(payload: ConvertPayload): Promise<ConvertJobResponse> {
-    return request<ConvertJobResponse>("/convert", {
+    const res = await request<ConvertJobResponse | any>("/jobs", {
       method: "POST",
       body: payload,
     });
+
+    // If backend returns object with job_id, return it
+    if (res && typeof res === "object" && res.job_id) {
+      return res as ConvertJobResponse;
+    }
+
+    // Extract job ID from Location header if available: /jobs/{jobId}/status
+    if (res && typeof res === "object" && res.location) {
+      const match = res.location.match(/\/jobs\/([^/]+)/);
+      if (match && match[1]) {
+        return {
+          job_id: match[1],
+          status: "queued",
+          location: res.location,
+        };
+      }
+    }
+
+    return res as ConvertJobResponse;
   },
 
+  /**
+   * GET /jobs/{jobId}/status (was /convert/{jobId}/status)
+   */
   async getConvertStatus(jobId: string): Promise<ConvertStatusResponse> {
-    return request<ConvertStatusResponse>(`/convert/${encodeURIComponent(jobId)}/status`);
+    return request<ConvertStatusResponse>(`/jobs/${encodeURIComponent(jobId)}/status`);
   },
 
   /**
@@ -367,7 +504,13 @@ export const api = {
             resolve(res);
           } else if (res.status === "failed") {
             cleanup();
-            reject({ code: 500, error: "GIF conversion failed during processing.", ...res });
+            reject({
+              status: 500,
+              code: 500,
+              message: "GIF conversion failed during processing.",
+              error: "GIF conversion failed during processing.",
+              ...res,
+            });
           } else {
             timer = setTimeout(poll, intervalMs);
           }
@@ -411,26 +554,58 @@ export const api = {
     return request<DownloadResponse>(`/gifs/me/${encodeURIComponent(key)}/download`);
   },
 
-  async updateGifVisibility(key: string, patch: { status: "public" | "private" } | any): Promise<{ message: string }> {
-    return request<{ message: string }>(`/gifs/me/${encodeURIComponent(key)}`, {
+  /**
+   * PATCH /gifs/me/{key} with partial update and optimistic locking (If-Match: <updated_at>)
+   */
+  async updateGif(
+    key: string,
+    patch: { name?: string; status?: "public" | "private" | string; persist?: boolean },
+    ifMatch?: string
+  ): Promise<GifItem | { message: string }> {
+    return request<GifItem | { message: string }>(`/gifs/me/${encodeURIComponent(key)}`, {
       method: "PATCH",
       body: patch,
+      ifMatch,
     });
   },
 
-  async deleteGif(key: string): Promise<{ gif_key: string; status: string }> {
-    return request<{ gif_key: string; status: string }>(`/gifs/me/${encodeURIComponent(key)}`, {
+  async updateGifVisibility(
+    key: string,
+    patch: { status: "public" | "private" } | any,
+    ifMatch?: string
+  ): Promise<{ message: string }> {
+    return request<{ message: string }>(`/gifs/me/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      body: patch,
+      ifMatch,
+    });
+  },
+
+  async deleteGif(key: string): Promise<{ gif_key: string; status: string } | string> {
+    return request<{ gif_key: string; status: string } | string>(`/gifs/me/${encodeURIComponent(key)}`, {
       method: "DELETE",
     });
   },
 
-  async saveRecentGif(key: string): Promise<void> {
-    return request<void>(`/gifs/me/recents/${encodeURIComponent(key)}/save`, {
-      method: "POST",
-    });
+  async saveRecentGif(key: string, ifMatch?: string): Promise<void> {
+    // Uses PATCH /gifs/me/{key} with { persist: true } or POST /gifs/me/recents/{key}/save
+    try {
+      await request<void>(`/gifs/me/${encodeURIComponent(key)}`, {
+        method: "PATCH",
+        body: { persist: true },
+        ifMatch,
+      });
+    } catch {
+      await request<void>(`/gifs/me/recents/${encodeURIComponent(key)}/save`, {
+        method: "POST",
+      });
+    }
   },
 
   // ---- Sharing ----
+  /**
+   * POST /gifs/me/{key}/shares (upserts/renews expire_at if share already exists)
+   */
   async shareGif(key: string, payload: SharePayload): Promise<string> {
     return request<string>(`/gifs/me/${encodeURIComponent(key)}/shares`, {
       method: "POST",
@@ -442,10 +617,13 @@ export const api = {
     return request<SharedGifItem[]>("/gifs/me/shares");
   },
 
-  async revokeShare(key: string, shareWithUserId: string): Promise<{ message: string }> {
-    return request<{ message: string }>(`/gifs/me/${encodeURIComponent(key)}/shares/${encodeURIComponent(shareWithUserId)}`, {
-      method: "DELETE",
-    });
+  async revokeShare(key: string, shareWithUserId: string): Promise<{ message: string } | string> {
+    return request<{ message: string } | string>(
+      `/gifs/me/${encodeURIComponent(key)}/shares/${encodeURIComponent(shareWithUserId)}`,
+      {
+        method: "DELETE",
+      }
+    );
   },
 };
 

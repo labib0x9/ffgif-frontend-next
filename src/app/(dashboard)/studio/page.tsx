@@ -13,6 +13,8 @@ import { ConversionStatus, GifItem } from "@/types";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 export default function StudioPage() {
   const [videoData, setVideoData] = useState<{
     uploadKey: string;
@@ -68,7 +70,7 @@ export default function StudioPage() {
     abortControllerRef.current = new AbortController();
 
     try {
-      // Step 1: Submit conversion job
+      // Step 1: Submit conversion job to POST /jobs (202 Accepted)
       const job = await api.convert({
         upload_key: videoData.uploadKey,
         start_time: startTime,
@@ -78,7 +80,11 @@ export default function StudioPage() {
         loop,
       });
 
-      // Step 2: Poll status
+      if (!job || !job.job_id) {
+        throw new Error("Invalid job response from server.");
+      }
+
+      // Step 2: Poll status at GET /jobs/{jobId}/status
       const result = await api.pollConversion(job.job_id, {
         signal: abortControllerRef.current.signal,
         onStatus: (status, progress) => {
@@ -93,7 +99,7 @@ export default function StudioPage() {
 
         const gifKey = result.gif_id || job.job_id;
 
-        // Step 3: Fetch final GIF details to play the GIF directly
+        // Step 3: Fetch final GIF details
         let finalItem: GifItem;
         try {
           finalItem = await api.getGif(gifKey);
@@ -135,7 +141,7 @@ export default function StudioPage() {
       if (err.name === "AbortError") {
         toastError("Conversion Cancelled", "Job polling was aborted.");
       } else {
-        toastError("Conversion Failed", err?.error || "Error processing GIF conversion.");
+        toastError("Conversion Failed", getApiErrorMessage(err, "Error processing GIF conversion."));
       }
       setIsConvertingModalOpen(false);
     }

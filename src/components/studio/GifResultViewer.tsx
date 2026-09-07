@@ -21,6 +21,8 @@ import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 import { ShareModal } from "@/components/library/ShareModal";
 
+import { getApiErrorMessage, isPreconditionError } from "@/lib/errors";
+
 export interface GifResultViewerProps {
   gif: GifItem;
   onReset: () => void;
@@ -106,15 +108,29 @@ export function GifResultViewer({ gif, onReset, onUpdateGif }: GifResultViewerPr
 
   const handleToggleVisibility = async () => {
     const nextStatus = currentGif.status === "public" ? "private" : "public";
+    const ifMatch = currentGif.updated_at || currentGif.etag;
     setIsTogglingVisibility(true);
     try {
-      await api.updateGifVisibility(currentGif.key, { status: nextStatus });
+      await api.updateGifVisibility(currentGif.key, { status: nextStatus }, ifMatch);
       const updated = { ...currentGif, status: nextStatus };
       setCurrentGif(updated);
       onUpdateGif?.(updated);
       toastSuccess("Visibility Updated", `GIF is now ${nextStatus}.`);
     } catch (err: any) {
-      toastError("Update Failed", err?.error || "Could not change visibility.");
+      if (isPreconditionError(err)) {
+        toastError("Conflict (412)", "GIF was modified in another session. Re-fetching latest details.");
+        try {
+          const fresh = await api.getGif(currentGif.key);
+          if (fresh) {
+            setCurrentGif(fresh);
+            onUpdateGif?.(fresh);
+          }
+        } catch {
+          // ignore
+        }
+      } else {
+        toastError("Update Failed", getApiErrorMessage(err, "Could not change visibility."));
+      }
     } finally {
       setIsTogglingVisibility(false);
     }
@@ -122,16 +138,30 @@ export function GifResultViewer({ gif, onReset, onUpdateGif }: GifResultViewerPr
 
   const handleSaveToLibrary = async () => {
     if (isSaved) return;
+    const ifMatch = currentGif.updated_at || currentGif.etag;
     setIsSaving(true);
     try {
-      await api.saveRecentGif(currentGif.key);
+      await api.saveRecentGif(currentGif.key, ifMatch);
       setIsSaved(true);
       const updated = { ...currentGif, persist: true };
       setCurrentGif(updated);
       onUpdateGif?.(updated);
       toastSuccess("Saved to Library", "This GIF is now permanently stored in your library.");
     } catch (err: any) {
-      toastError("Save Failed", err?.error || "Could not save to library.");
+      if (isPreconditionError(err)) {
+        toastError("Conflict (412)", "GIF was modified in another session. Re-fetching latest details.");
+        try {
+          const fresh = await api.getGif(currentGif.key);
+          if (fresh) {
+            setCurrentGif(fresh);
+            onUpdateGif?.(fresh);
+          }
+        } catch {
+          // ignore
+        }
+      } else {
+        toastError("Save Failed", getApiErrorMessage(err, "Could not save to library."));
+      }
     } finally {
       setIsSaving(false);
     }

@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 function VerifyContent() {
   const searchParams = useSearchParams();
   const tokenFromUrl = searchParams.get("token") || "";
@@ -36,7 +38,7 @@ function VerifyContent() {
         toastSuccess("Account Verified!", "You can now sign in with your credentials.");
       } catch (err: any) {
         setStatus("error");
-        const msg = err?.error || "This verification token is invalid or has expired.";
+        const msg = getApiErrorMessage(err, "This verification token is invalid or has expired.");
         setErrorMessage(msg);
         toastError("Verification Failed", msg);
       }
@@ -60,9 +62,9 @@ function VerifyContent() {
     setIsResending(true);
     try {
       await api.resendVerify(email);
-      toastSuccess("Verification Email Sent", "Please check your inbox for the new activation link.");
+      toastSuccess("Verification Email Dispatched (202)", "Please check your inbox for the activation link.");
     } catch (err: any) {
-      toastError("Resend Failed", err?.error || "Could not send verification email.");
+      toastError("Resend Failed", getApiErrorMessage(err, "Could not send verification email."));
     } finally {
       setIsResending(false);
     }

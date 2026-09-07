@@ -19,6 +19,8 @@ import { Button } from "@/components/ui/Button";
 import { api } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";
 
+import { getApiErrorMessage } from "@/lib/errors";
+
 export default function SignupPage() {
   const [formData, setFormData] = useState({
     username: "",
@@ -78,7 +80,7 @@ export default function SignupPage() {
       setIsSuccess(true);
       toastSuccess("Account Created!", "Please check your inbox for the activation link.");
     } catch (err: any) {
-      const msg = err?.error || "Failed to create account. Please verify your details.";
+      const msg = getApiErrorMessage(err, "Failed to create account. Please verify your details.");
       setErrorMessage(msg);
       toastError("Registration Failed", msg);
     } finally {
