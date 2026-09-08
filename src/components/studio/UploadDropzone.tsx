@@ -88,12 +88,14 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
 
       // Step 3: Poll status until "ok"
       setProcessingStatus("Processing & indexing video...");
-      await api.pollUploadStatus(uploadKey);
+      const statusRes = await api.pollUploadStatus(uploadKey);
 
-      // Step 4: Retrieve stream URL or fallback to local object URL
+      // Step 4: Retrieve stream URL via Location header or fallback to uploadKey/local object URL
       let streamUrl = "";
       try {
-        const streamRes = await api.getStreamUrl(uploadKey);
+        const streamRes = statusRes?.location
+          ? await api.getStreamFromLocation(statusRes.location)
+          : await api.getStreamUrl(uploadKey);
         streamUrl = streamRes.url;
       } catch {
         streamUrl = URL.createObjectURL(file);
@@ -135,7 +137,9 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
     if (!lastUpload) return;
     setIsLoadingLast(true);
     try {
-      const streamRes = await api.getStreamUrl(lastUpload.key);
+      const streamRes = lastUpload.location
+        ? await api.getStreamFromLocation(lastUpload.location)
+        : await api.getStreamUrl(lastUpload.key);
       toastSuccess("Video Loaded", `Loaded last session video: ${lastUpload.filename}`);
       onVideoReady({
         uploadKey: lastUpload.key,

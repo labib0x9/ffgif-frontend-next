@@ -33,8 +33,8 @@ export const BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL !== undefined
     ? process.env.NEXT_PUBLIC_API_BASE_URL
     : process.env.NODE_ENV === "development"
-    ? "http://localhost:8080"
-    : "";
+      ? "http://127.0.0.1:8080"
+      : "";
 
 let authToken: string | null = null;
 
@@ -100,9 +100,14 @@ export async function request<T = unknown>(
     headers["If-Match"] = ifMatch.replace(/^"|"$/g, "");
   }
 
+  const requestUrl =
+    path.startsWith("http://") || path.startsWith("https://")
+      ? path
+      : `${BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
+
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}${path}`, {
+    res = await fetch(requestUrl, {
       method,
       headers,
       body: body === undefined ? undefined : raw ? (body as BodyInit) : JSON.stringify(body),
@@ -180,8 +185,8 @@ export async function request<T = unknown>(
         (res.status === 412
           ? "Precondition Failed: Resource was updated elsewhere. Please refresh."
           : res.status === 422
-          ? "Validation Failed: Please verify your form inputs."
-          : "An unexpected server error occurred.");
+            ? "Validation Failed: Please verify your form inputs."
+            : "An unexpected server error occurred.");
 
       const status = parsed.status ?? (typeof parsed.code === "number" ? parsed.code : res.status);
 
@@ -200,10 +205,10 @@ export async function request<T = unknown>(
       res.status === 412
         ? "Precondition Failed: Resource was updated elsewhere. Please refresh."
         : res.status === 422
-        ? "Validation Failed: Please verify your input."
-        : typeof parsed === "string" && parsed
-        ? parsed
-        : "An unexpected server error occurred.";
+          ? "Validation Failed: Please verify your input."
+          : typeof parsed === "string" && parsed
+            ? parsed
+            : "An unexpected server error occurred.";
 
     const error: ApiError = {
       error_code: res.status === 412 ? "PRECONDITION_FAILED" : res.status === 422 ? "VALIDATION_FAILED" : undefined,
@@ -425,8 +430,23 @@ export const api = {
     };
   },
 
-  async getStreamUrl(key: string): Promise<StreamResponse> {
-    return request<StreamResponse>(`/uploads/${encodeURIComponent(key)}/stream`);
+  /**
+   * Retrieves presigned streaming URL for video playback.
+   * Accepts either an upload/converted key or a location path (e.g. "/uploads/converted_xxx.mp4/stream").
+   */
+  async getStreamUrl(keyOrPath: string): Promise<StreamResponse> {
+    const path =
+      keyOrPath.startsWith("/") || keyOrPath.startsWith("http://") || keyOrPath.startsWith("https://")
+        ? keyOrPath
+        : `/uploads/${encodeURIComponent(keyOrPath)}/stream`;
+    return request<StreamResponse>(path);
+  },
+
+  /**
+   * Retrieves presigned streaming URL from the Location header path.
+   */
+  async getStreamFromLocation(locationPath: string): Promise<StreamResponse> {
+    return this.getStreamUrl(locationPath);
   },
 
   async getLastUpload(): Promise<LastUploadMetadata> {

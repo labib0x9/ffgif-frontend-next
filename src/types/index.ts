@@ -53,15 +53,17 @@ export interface UploadPresignedResponse {
   expires_in: number;
 }
 
-export type UploadStatus = "pending" | "processing" | "ok" | "failed";
+export type UploadStatus = "pending" | "uploading" | "processing" | "ok" | "failed";
 
 export interface UploadStatusResponse {
   status: UploadStatus;
+  location?: string;
 }
 
 export interface StreamResponse {
   url: string;
-  expires_in: number;
+  expires_in?: number;
+  expire_in?: number;
 }
 
 export interface LastUploadMetadata {
@@ -73,6 +75,7 @@ export interface LastUploadMetadata {
   duration_sec: number;
   uploaded_at: string;
   thumbnail_url?: string;
+  location?: string;
 }
 
 export interface ConvertPayload {
