@@ -458,9 +458,15 @@ export const api = {
    * POST /jobs (was /convert) - Returns 202 Accepted with Location header / job response
    */
   async convert(payload: ConvertPayload): Promise<ConvertJobResponse> {
+    const key = payload.stream_key || payload.upload_key;
+    const body = {
+      ...payload,
+      upload_key: key,
+      stream_key: key,
+    };
     const res = await request<ConvertJobResponse | any>("/jobs", {
       method: "POST",
-      body: payload,
+      body,
     });
 
     // If backend returns object with job_id, return it

@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ProgressBar } from "@/components/ui/ProgressBar";
-import { formatBytes, formatDuration } from "@/lib/utils";
+import { formatBytes, formatDuration, extractStreamingKey } from "@/lib/utils";
 import { api, MAX_UPLOAD_BYTES } from "@/lib/api";
 import { LastUploadMetadata } from "@/types";
 import { useToast } from "@/context/ToastContext";
@@ -90,12 +90,18 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
       setProcessingStatus("Processing & indexing video...");
       const statusRes = await api.pollUploadStatus(uploadKey);
 
-      // Step 4: Retrieve stream URL via Location header or fallback to uploadKey/local object URL
+      // Extract streaming key from status response / Location header (used for conversion)
+      const streamingKey =
+        statusRes?.stream_key ||
+        statusRes?.streaming_key ||
+        extractStreamingKey(statusRes?.location, uploadKey);
+
+      // Step 4: Retrieve stream URL via Location header or fallback to streamingKey
       let streamUrl = "";
       try {
         const streamRes = statusRes?.location
           ? await api.getStreamFromLocation(statusRes.location)
-          : await api.getStreamUrl(uploadKey);
+          : await api.getStreamUrl(streamingKey);
         streamUrl = streamRes.url;
       } catch {
         streamUrl = URL.createObjectURL(file);
@@ -109,7 +115,7 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
         const duration = tempVideo.duration || 10;
         toastSuccess("Video Ready!", `${file.name} uploaded successfully.`);
         onVideoReady({
-          uploadKey,
+          uploadKey: streamingKey,
           filename: file.name,
           streamUrl: streamUrl || tempVideo.src,
           duration,
@@ -119,7 +125,7 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
       tempVideo.onerror = () => {
         // Fallback default duration
         onVideoReady({
-          uploadKey,
+          uploadKey: streamingKey,
           filename: file.name,
           streamUrl: streamUrl || URL.createObjectURL(file),
           duration: 15,
@@ -137,12 +143,17 @@ export function UploadDropzone({ onVideoReady }: UploadDropzoneProps) {
     if (!lastUpload) return;
     setIsLoadingLast(true);
     try {
+      const streamingKey =
+        lastUpload.stream_key ||
+        lastUpload.streaming_key ||
+        extractStreamingKey(lastUpload.location, lastUpload.key);
+
       const streamRes = lastUpload.location
         ? await api.getStreamFromLocation(lastUpload.location)
-        : await api.getStreamUrl(lastUpload.key);
+        : await api.getStreamUrl(streamingKey);
       toastSuccess("Video Loaded", `Loaded last session video: ${lastUpload.filename}`);
       onVideoReady({
-        uploadKey: lastUpload.key,
+        uploadKey: streamingKey,
         filename: lastUpload.filename,
         streamUrl: streamRes.url,
         duration: lastUpload.duration_sec || 10,

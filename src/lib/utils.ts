@@ -69,3 +69,14 @@ export function getRemainingTime(dateString: string): string {
     return "Unknown";
   }
 }
+
+export function extractStreamingKey(location?: string | null, fallbackKey = ""): string {
+  if (!location) return fallbackKey;
+  const match = location.match(/\/uploads\/([^?#]+?)(?:\/stream)?(?:\?|#|$)/);
+  if (match && match[1]) {
+    return decodeURIComponent(match[1]);
+  }
+  return location || fallbackKey;
+}
+
+

@@ -58,6 +58,9 @@ export type UploadStatus = "pending" | "uploading" | "processing" | "ok" | "fail
 export interface UploadStatusResponse {
   status: UploadStatus;
   location?: string;
+  stream_key?: string;
+  streaming_key?: string;
+  key?: string;
 }
 
 export interface StreamResponse {
@@ -69,6 +72,8 @@ export interface StreamResponse {
 export interface LastUploadMetadata {
   user_id: string;
   key: string;
+  stream_key?: string;
+  streaming_key?: string;
   filename: string;
   content_type: string;
   size_bytes: number;
@@ -80,6 +85,7 @@ export interface LastUploadMetadata {
 
 export interface ConvertPayload {
   upload_key: string;
+  stream_key?: string;
   start_time: number;
   end_time: number;
   fps: number;
@@ -93,7 +99,7 @@ export interface ConvertJobResponse {
   location?: string;
 }
 
-export type ConversionStatus = "queued" | "converting" | "completed" | "failed";
+export type ConversionStatus = "queued" | "processing" | "converting" | "completed" | "failed";
 
 export interface ConvertStatusResponse {
   job_id: string;

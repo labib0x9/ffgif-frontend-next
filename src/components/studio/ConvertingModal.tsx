@@ -28,6 +28,7 @@ export function ConvertingModal({
           description: "Waiting for worker allocation in conversion pipeline...",
           step: 1,
         };
+      case "processing":
       case "converting":
         return {
           title: "Rendering GIF via FFmpeg",
@@ -78,7 +79,7 @@ export function ConvertingModal({
         <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto pt-2">
           {[
             { num: 1, name: "Queued" },
-            { num: 2, name: "Converting" },
+            { num: 2, name: "Processing" },
             { num: 3, name: "Done" },
           ].map((item) => {
             const isCurrent = step === item.num;
@@ -104,7 +105,7 @@ export function ConvertingModal({
         {/* Progress Bar */}
         <div className="max-w-sm mx-auto pt-2">
           <ProgressBar
-            progress={progress || (status === "queued" ? 25 : status === "converting" ? 75 : 100)}
+            progress={progress || (status === "queued" ? 25 : status === "processing" || status === "converting" ? 75 : 100)}
             isIndeterminate={status !== "completed"}
             color="indigo"
             showPercent={false}
